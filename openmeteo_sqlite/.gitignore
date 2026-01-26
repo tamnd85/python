@@ -1,0 +1,36 @@
+# === ARCHIVOS SENSIBLES ===
+.env
+
+# === ARCHIVOS DE PYTHON ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# === ENTORNOS VIRTUALES ===
+venv/
+.env/
+.venv/
+
+# === ARCHIVOS DE SALIDA ===
+*.csv
+*.xlsx
+*.parquet
+*.db
+
+# === MODELOS ENTRENADOS ===
+models/
+*.pkl
+*.joblib
+
+# === LOGS ===
+logs/
+*.log
+
+# === CONFIGURACIÓN DE EDITORES ===
+.vscode/
+.idea/
+
+# === ARCHIVOS TEMPORALES ===
+*.tmp
+*.bak
