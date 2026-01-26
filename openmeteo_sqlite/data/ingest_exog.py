@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import date
 from tqdm import tqdm
 
-DB_PATH = "db/openmeteo.db"
+DB_PATH = "datos/openmeteo.db"
 
 # Coordenadas de tus ciudades
 COORDS = {
