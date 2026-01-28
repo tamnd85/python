@@ -1,18 +1,31 @@
+"""
+Módulo: ingest_exog.py
+Autor: tamara
+Descripción:
+    Ingesta completa de variables exógenas desde la API histórica de Open-Meteo.
+    Este módulo descraga todas las variables diarias disponibles, valida la
+    respuesta, filtra únicamente las columnas compatibles con la base de datos
+    local y realiza la inserción en SQLite.
+    
+    Forma paret del sistema de ingesta masiva para enriquecer la base de datos
+    con información meteorológica detallada. 
+"""
 import requests
 import sqlite3
 import pandas as pd
 from datetime import date
 from tqdm import tqdm
 
+# Ruta a la base de datos SQLite
 DB_PATH = "datos/openmeteo.db"
 
 # Coordenadas de tus ciudades
 COORDS = {
-    "Burgos": (42.3439, -3.6969),
-    # "Santander": (43.4623, -3.8099),
+    #"Burgos": (42.3439, -3.6969),
+    "Santander": (43.4623, -3.8099),
 }
 
-# Variables diarias completas (Open-Meteo)
+# Variables diarias completas solicitadas a Open-Meteo
 DAILY_VARS = [
     "temperature_2m_mean",
     "temperature_2m_max",
@@ -43,12 +56,26 @@ DAILY_VARS = [
 ]
 
 def ingest_exog():
+    """
+    Descarga e inserta en la base de datos todas las variables diarias exógenas
+    disponibles para cada ciudad configurada
+    
+    Flujo:
+        1. Conectar a SQLite y obtener columnas existentes eb la tabla.
+        2. Descargar datos diarios completos desde Open-Meteo.
+        3. validar la respuesta de la API.
+        4. Filtrar columnas para que coincidan con la estructura de la BBDD.
+        5. Insertar los datos en la tabla 'mediciones' 
+    """
+    
     print("=== INGESTA DIARIA COMPLETA (EXÓGENAS) ===")
 
+    # Abrir conexión a SQLite
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
-    # Comprobar columnas existentes en la tabla
+    # Obtener las columnas reales de la tabla 'mediciones'
+    # Esto permite filtrar solo las columnas compatibles  antes de insertar
     cur.execute("PRAGMA table_info(mediciones)")
     existing_cols = {row[1] for row in cur.fetchall()}
 
@@ -60,9 +87,11 @@ def ingest_exog():
     start_date = "2000-01-01"
     end_date = str(date.today())
 
+    # Recorrer todas las ciudades configuradas
     for city, (lat, lon) in COORDS.items():
         print(f"\nDescargando datos para {city}...")
 
+        # Construcción de la URL con todas las variables diarias
         url = (
             "https://archive-api.open-meteo.com/v1/archive?"
             f"latitude={lat}&longitude={lon}"
@@ -72,25 +101,31 @@ def ingest_exog():
             "&timezone=auto"
         )
 
+        # Petición HTTP a la API
         r = requests.get(url)
         data = r.json()
 
-        # Validación robusta
+        # Validación: si no hay bloque "daily", no se puede procesar
         if "daily" not in data:
             print(f"⚠ La API no devolvió datos diarios para {city}. Respuesta:")
             print(data)
             continue
-
+        
+        # convertir el bloque "daily" en el DataFrame
         df = pd.DataFrame(data["daily"])
+        
+        # Añadir columna con el nombre de la estación (ciudad)
         df["estacion"] = city
 
-        # Filtrar solo columnas que existen en tu tabla
+        # Filtrar solo columnas que existen en tu tabla Sqlite
+        # Esto evita erorres se Open-Meteo añade nuevas variables
         df = df[[col for col in df.columns if col in existing_cols]]
 
-        # Insertar en SQLite
+        # Insertar los datos en la tabla 'mediciones'
         df.to_sql("mediciones", conn, if_exists="append", index=False)
 
         print(f"✔ {len(df)} filas insertadas para {city}")
 
+    # Cerrar la conexión
     conn.close()
     print("\nIngesta completada.")

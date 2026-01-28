@@ -9,6 +9,10 @@ Descripción:
         - eliminar duplicados
         - asegurar frecuencia diaria
         - interpolar huecos
+        
+    Este módulo garantiza que la serie resultante se consistente,
+    continua y adecuada para modelos SARIMA, que requieren una frecuencia
+    temporal fija y ausencia de valores faltantes.
 """
 
 import pandas as pd
@@ -41,36 +45,57 @@ def preparar_serie_sarima(df):
     ValueError
         Si la serie queda vacía tras el preprocesado.
     """
-
-    # Seleccionar columnas necesarias
+    #--------------------------------------------------------------------------------
+    # 1. Seleccionar únicamente las columnas necesarias
+    #    Esto evita arratar columnas irrelevantes al modelo SARIMA
+    #--------------------------------------------------------------------------------
     df_sarima = df[["time", "temperature_2m_mean"]].copy()
 
-    # Asegurar datetime y eliminar fechas inválidas
+    #--------------------------------------------------------------------------------
+    # 2. Convertir 'time' a datetime y eliminar fechas inválidas
+    #    errors="coerce" convierte valores no parseables en NaT.
+    #--------------------------------------------------------------------------------
     df_sarima["time"] = pd.to_datetime(df_sarima["time"], errors="coerce")
     df_sarima = df_sarima.dropna(subset=["time"])
 
-    # Ordenar por fecha
+    #--------------------------------------------------------------------------------
+    # 3. Ordenar por fecha para garantizar consistencia temporal
+    #--------------------------------------------------------------------------------
     df_sarima = df_sarima.sort_values("time")
 
-    # Agrupar por fecha (evita duplicados)
+    #--------------------------------------------------------------------------------
+    # 4. Agrupar por fecha (día) y hacer media
+    #    Esto elimina duplicados y asegura un valor único por día.
+    #--------------------------------------------------------------------------------
     df_sarima = df_sarima.groupby("time").mean()
 
-    # Asegurar frecuencia diaria
+    #--------------------------------------------------------------------------------
+    # 5. Asegurar frecuencia diaria fija
+    #    asfreq("D") crea una fila por día, insertando NaN donde falten datos
+    #--------------------------------------------------------------------------------
     df_sarima = df_sarima.asfreq("D")
 
-    # Interpolación y forward fill
+    #--------------------------------------------------------------------------------
+    # 6. Interpolación + forward fill
+    #    - interpolate(): rellena huecos suavemente
+    #    - ffill(): rellena valores iniciales se empiezan en NaN
+    #--------------------------------------------------------------------------------
     df_sarima["temperature_2m_mean"] = (
         df_sarima["temperature_2m_mean"]
         .interpolate()
         .ffill()
     )
 
-    # Validación final
+    #--------------------------------------------------------------------------------
+    # 7. Validación final: la serie no puede quedar vacia
+    #--------------------------------------------------------------------------------
     if df_sarima.empty:
         raise ValueError(
             "La serie SARIMA está vacía después de preparar_serie_sarima. "
             "Revisa si el DataFrame original contiene datos válidos."
         )
 
-    # Devolver solo la serie univariada
+    #--------------------------------------------------------------------------------
+    # 8. Devolver solo la serie univariada
+    #--------------------------------------------------------------------------------
     return df_sarima["temperature_2m_mean"]

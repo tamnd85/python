@@ -18,7 +18,23 @@ El objetivo es disponer de un pipeline profesional, reproducible y mantenible, c
 
         Modelo híbrido estable: predicción = SARIMA + residuo_predicho
 
-        El sistema descarga datos históricos desde Open-Meteo, los limpia y transforma, los almacena en SQLite, genera features para SARIMA y XGBOOST, entrena modelos por ciudad , genera predicciones futuras de forma estable y coherente, evalúa las reglas meteorológicas y envía alertas por Telegram y email.
+    El pipeline:
+
+        1.Descarga datos históricos desde Open‑Meteo
+
+        2.Limpia y transforma el dataset
+
+        3.Lo almacena en SQLite
+
+        4.Genera features para SARIMA y XGBoost
+
+        5.Entrena modelos por ciudad
+
+        6.Produce predicciones futuras
+
+        7.Evalúa reglas meteorológicas
+
+        8.Envía alertas por Telegram y email
 
 ## Funcionalidades principales
 
@@ -44,7 +60,8 @@ El módulo cleaning.py:
 
 ### Modelo predictivo
 
-El sistema entrena dos modelos:
+El sistema entrena dos modelos híbridos independientes:
+#### Entrenamiento normal
         - SARIMA
                 - Captura estacionalidad anual
                 - Modela tendencia y ciclos
@@ -56,6 +73,28 @@ El sistema entrena dos modelos:
 Los modelos se guardan en 
         -models/sarima/sarima.pkl
         -models/xgboost/xgb.pkl
+
+#### Entrenamiento mensual
+Pipeline mensual:
+        1.Agregación mensual del dataset
+        2.Entrenamiento de SARIMA mensual
+        3.Cálculo del residuo mensual
+        4.Entrenamiento de XGBoost mensual sobre el residuo
+        5.Predicción híbrida mensual
+
+Modelo generado:
+
+models/xgboost/xgb_multiciudad_mensual.pkl
+
+Este modelo permite análisis de tendencia a largo plazo y predicciones más estables en horizontes amplios.
+
+#### Entrenamiento y validación (80/20)
+El sistema utiliza un split temporal 80/20, respetando el orden cronológico:
+        80% inicial → entrenamiento
+        20% final → validación
+        Sin mezcla aleatoria (time‑series safe)
+
+Esto garantiza que los modelos no vean información futura durante el entrenamiento.
 
 ### Análisis y visualización
 
@@ -95,13 +134,18 @@ openmeteo_sqlite/
 ├── db/
 │   └── database.py
 ├── feautures/
+│   ├── muestreo.py
 │   ├── sarima_features.py
 │   └── xgb_features.py
 ├── models/
 │   ├── sarima
+│   │   ├── sarima_mensual.pkl
 │   │   └── sarima.pkl
 │   ├── xgboost
-│   │   └── xgb.pkl
+│   │   ├── xgb_multiciudad_features.pkl
+│   │   ├── xgb_multiciudad_mensual.pkl
+│   │   ├── xgb_multiciudad_features.pkl
+│   │   └── xgb_multiciudad.pkl
 │   ├── hybrid.py
 │   ├── sarima.py
 │   └── xgboost_model.py
@@ -139,10 +183,6 @@ openmeteo_sqlite/
         python pipeline/train.py
         python pipeline/forecast.py
         python check_alerts.py
-
-
-
-
 
 
 ##  Base de datos
