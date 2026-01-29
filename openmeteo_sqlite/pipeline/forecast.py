@@ -1,164 +1,137 @@
 """
-Módulo: forecast.py
-Autor: Tamara (versión extendida con soporte mensual)
-Descripción:
-    Predicción futura usando el modelo híbrido SARIMA + XGBoost.
-    Ahora permite elegir entre:
-        - modelos normales
-        - modelos entrenados con muestreo mensual
-        
-    Este módulo implementa un frecast híbrido autoregresivo, garantizando:
-        - Coherencia entre SARIMA in-sample y SARIMA futuro
-        - Generación correcta de features futuras para XGB
-        - Compatibilidad con modelos entrenados con muestreo mensual
+================================================================================
+MÓDULO: predict.py
+PROYECTO: Sistema de Predicción Meteorológica Híbrida (OpenMeteo-SQLite)
+AUTOR: Tamara
+DESCRIPCIÓN:
+    Orquestador de predicción en producción. Realiza el forecast híbrido 
+    recursivo utilizando datos en tiempo real de la base de datos.
+
+LÓGICA DE INFERENCIA:
+    1. Carga Dinámica: Recupera los modelos (SARIMA y XGBoost) según el modo 
+       (normal o mensual).
+    2. Segmentación de Datos: Separa el historial (pasado) de los datos de 
+       pronóstico (viento/presión futuros ya descargados).
+    3. Ciclo Recursivo: Predice día a día. La salida de hoy se convierte en el 
+       'lag' (antecedente) para la predicción de mañana.
+    4. Potenciador Geográfico: Aplica correcciones al residuo según la dirección
+       del viento (Efecto Foehn para el Sur, Efecto Marítimo para el Norte).
+
+AVISO: Este script asume que la base de datos ya contiene el pronóstico 
+meteorológico del viento para los próximos 7 días (Bloque 2 de ingesta).
+================================================================================
 """
 
 import pandas as pd
+import numpy as np
 from datetime import timedelta
-
 from db.database import load_from_db
-from models.sarima import cargar_sarima, predecir_sarima_futuro
+from models.sarima import cargar_sarima
 from models.xgboost_model import cargar_xgboost
-from features.xgb_features import generar_features_futuras
+from features.xgb_features import preparar_features_xgb
 
-
-#-------------------------------------------------------------
-# PREDICCIÓN FUTURA HÍBRIDA
-#-------------------------------------------------------------
-
-def predecir_hibrido(ciudad, dias=7, modo="normal"):
+def predecir_hibrido(ciudad, dias_forecast=7, modo="normal"):
     """
-    Predicción futura híbrida SARIMA +XGB.
+    Genera el pronóstico final combinado para una ciudad específica.
+    """
+    # ---------------------------------------------------------------------------
+    # 1. CARGA DE MODELOS Y CONFIGURACIÓN
+    # ---------------------------------------------------------------------------
+    suffix = "_mensual" if modo == "mensual" else ""
+    sarima = cargar_sarima(f"{ciudad}{suffix}")
+    xgb_model, features_names = cargar_xgboost(f"xgb_multiciudad{suffix}")
+
+    # ---------------------------------------------------------------------------
+    # 2. CARGA Y SEGMENTACIÓN DE DATOS (Time-Splitting Real)
+    # ---------------------------------------------------------------------------
+    df_all = load_from_db(estacion=ciudad)
+    df_all["time"] = pd.to_datetime(df_all["time"])
+    df_all = df_all.sort_values("time")
     
-    Parámetros:
-        ciudad: str
-            Nombre de la ciudad.
-        dias: int
-            Número de días futuros a predecir.
-        modo: str
-            "normal" -> usa sarima_{ciudad}.pkl + xgb_multiciudad.pkl
-            "mensual" -> usa sarima_{ciudad}_mensual.pkl + xgb_multiciudad_mensual.pkl
-            
-    Flujo detallado:
-        1. cargar datos históricos desde SQLite.
-        2. Cargar modelos SARIMA y XGB según el modo.
-        3. Calcular residuo histórico (real-sarima_in_sample).
-        4. Obtener predicciones SARIMA futuras.
-        5. Forecast híbrido autoregresivo:
-            - Generar features futuras coherentes
-            - Predecir residuo_pred con XGB
-            - Híbrido = sarima_pred + residuo_pred
-            - Actualizar historial (autoregresivo)
-    """
+    hoy = pd.Timestamp.now().normalize() 
+    
+    # Datos históricos (con temperatura real medida)
+    df_hist = df_all[df_all["time"] < hoy].copy()
+    # Datos de pronóstico (viento/presión conocidos, temperatura a predecir)
+    df_futuro_meteo = df_all[df_all["time"] >= hoy].copy()
 
-    # --------------------------------------------------------
-    # 1. Datos históricos
-    # --------------------------------------------------------
-    df = load_from_db(estacion=ciudad)
+    # ---------------------------------------------------------------------------
+    # 3. GENERACIÓN DE BASE ESTADÍSTICA (SARIMA)
+    # ---------------------------------------------------------------------------
+    sarima_forecast = sarima.get_forecast(steps=dias_forecast).predicted_mean
+    fechas_futuras = [hoy + timedelta(days=i+1) for i in range(dias_forecast)]
+    
+    resultados = []
+    df_dinamico = df_hist.copy()
 
-    if df.empty:
-        raise ValueError(f"No hay datos para la ciudad '{ciudad}'.")
+    print(f"--- Iniciando Forecast Híbrido Real: {ciudad} ---")
 
-    # Asegurar formato correcto de la fecha
-    df["time"] = pd.to_datetime(df["time"], errors="coerce")
-    df = df.dropna(subset=["temperature_2m_mean", "time"])
-    df = df.sort_values("time").reset_index(drop=True)
+    # ---------------------------------------------------------------------------
+    # 4. BUCLE DE PREDICCIÓN RECURSIVA (Híbrido + Potenciador)
+    # ---------------------------------------------------------------------------
+    for i in range(dias_forecast):
+        fecha_target = fechas_futuras[i]
+        pred_base = sarima_forecast.iloc[i]
+        
+        # Intentar obtener meteorología externa (pronóstico de viento en BD)
+        meteo_dia = df_futuro_meteo[df_futuro_meteo["time"] == fecha_target]
+        
+        if not meteo_dia.empty:
+            nueva_fila = meteo_dia.iloc[:1].copy()
+            es_meteo_real = True
+        else:
+            # Fallback en caso de falta de datos externos (persistencia climática)
+            print(f"⚠️ Día {i+1} ({fecha_target.date()}): Usando persistencia.")
+            nueva_fila = df_dinamico.iloc[-1:].copy()
+            es_meteo_real = False
 
-    # --------------------------------------------------------
-    # 2. Modelos (NORMAL o MENSUAL)
-    # --------------------------------------------------------
-    if modo == "normal":
-        sarima_model = cargar_sarima(ciudad)
-        xgb_model, features = cargar_xgboost("xgb_multiciudad")
+        # Preparar fila para el XGBoost
+        nueva_fila["time"] = fecha_target
+        nueva_fila["sarima_pred"] = pred_base
+        nueva_fila["temperature_2m_mean"] = pred_base # Semilla para el cálculo
+        nueva_fila["estacion"] = ciudad
 
-    elif modo == "mensual":
-        sarima_model = cargar_sarima(f"{ciudad}_mensual")
-        xgb_model, features = cargar_xgboost("xgb_multiciudad_mensual")
+        # Cálculo dinámico de features (Lags y Transformaciones Circulares)
+        df_temp_total = pd.concat([df_dinamico, nueva_fila], ignore_index=True)
+        temp_feat = preparar_features_xgb(df_temp_total, modo_entrenamiento=False)
+        fila_input = temp_feat.tail(1)
 
-    else:
-        raise ValueError("modo debe ser 'normal' o 'mensual'.")
-
-    # --------------------------------------------------------
-    # 3. SARIMA in-sample (para residuo histórico)
-    # --------------------------------------------------------
-    # Predicción SARIMA alineada con el histórico
-    sarima_insample = sarima_model.get_prediction(dynamic=False).predicted_mean
-    sarima_insample = sarima_insample.reindex(df["time"]).reset_index(drop=True)
-
-    # Construcción del historial con residuo real
-    historial = df.copy()
-    historial["sarima_pred"] = sarima_insample.values
-    historial["residuo"] = (
-        historial["temperature_2m_mean"] - historial["sarima_pred"]
-    )
-
-    # --------------------------------------------------------
-    # 4. SARIMA futuro
-    # --------------------------------------------------------
-    df_sarima = predecir_sarima_futuro(df, sarima_model, dias)
-    sarima_preds = df_sarima["sarima_pred"].values
-
-    # --------------------------------------------------------
-    # 5. Forecast híbrido autoregresivo
-    # --------------------------------------------------------
-    predicciones = []
-
-    for i in range(dias):
-
-        # Fecha futura = último día + 1
-        fecha_pred = historial["time"].max() + timedelta(days=1)
-        sarima_pred = sarima_preds[i]
-
-        #-----------------------------------------------------
-        # Features futuras coherentes
-        #-----------------------------------------------------
-        temp_feat = generar_features_futuras(
-            historial=historial,
-            sarima_preds=sarima_preds,
-            step=i + 1
-        )
-
-        # CORRECCIÓN IMPORTANTE PARA EL MODO MENSUAL
-        # Algunos modelos mensuales incluyen 'year' como feature
-        if "year" in features and "year" not in temp_feat.columns:
-            temp_feat["year"] = temp_feat["time"].dt.year
-
-        # Validación estricta de features
-        faltan = [c for c in features if c not in temp_feat.columns]
-        if faltan:
-            raise ValueError(f"Faltan features futuras: {faltan}")
-
-        #-----------------------------------------------------
-        # XGB predice residuo futuro
-        #-----------------------------------------------------
-        X = temp_feat[features]
+        # Inferencia del residuo con XGBoost
+        X = fila_input[features_names]
         residuo_pred = xgb_model.predict(X)[0]
+        
+        # -----------------------------------------------------------------------
+        # POTENCIADOR ESPECÍFICO (Lógica de Vientos de Cantabria)
+        # -----------------------------------------------------------------------
+        v_dir = nueva_fila["wind_direction_10m_dominant"].values[0]
+        
+        if es_meteo_real:
+            # Componente SUR: Suele traer aire seco y cálido (Efecto Foehn)
+            if 160 <= v_dir <= 220:
+                residuo_final = residuo_pred * 1.6 
+            # Componente NORTE: Aire húmedo y fresco del Cantábrico
+            elif v_dir <= 40 or v_dir >= 320:
+                residuo_final = residuo_pred * 1.4
+            else:
+                residuo_final = residuo_pred
+        else:
+            residuo_final = residuo_pred
 
-        #-----------------------------------------------------
-        # Reconstrucción híbrida
-        #-----------------------------------------------------
-        pred_hibrida = sarima_pred + residuo_pred
+        # Reconstrucción Final: Tendencia + Ajuste Inteligente
+        pred_final = pred_base + residuo_final
+        
+        print(f"Día {i+1} | Viento: {v_dir:.0f}° | SARIMA: {pred_base:.2f} | FINAL: {pred_final:.2f}")
 
-        #-----------------------------------------------------
-        # Actualizar historial ( autoregresivo)
-        #-----------------------------------------------------
-        nueva_fila = historial.iloc[-1].copy()
-        nueva_fila["time"] = fecha_pred
-        nueva_fila["temperature_2m_mean"] = pred_hibrida
-        nueva_fila["sarima_pred"] = sarima_pred
-        nueva_fila["residuo"] = residuo_pred
-
-        historial = pd.concat(
-            [historial, pd.DataFrame([nueva_fila])],
-            ignore_index=True
-        )
-
-        # Guardar predicción
-        predicciones.append({
-            "time": fecha_pred,
-            "sarima": sarima_pred,
-            "residuo_pred": residuo_pred,
-            "pred_hibrida": pred_hibrida
+        resultados.append({
+            "fecha": fecha_target,
+            "sarima": round(pred_base, 2),
+            "viento_dir": round(v_dir, 0),
+            "hibrida": round(pred_final, 2)
         })
+        
+        # ACTUALIZACIÓN RECURSIVA: La predicción se inyecta como dato histórico
+        # para que el cálculo del 'lag' del día siguiente sea coherente.
+        nueva_fila["temperature_2m_mean"] = pred_final
+        df_dinamico = pd.concat([df_dinamico, nueva_fila], ignore_index=True)
 
-    return pd.DataFrame(predicciones)
+    return pd.DataFrame(resultados)

@@ -1,67 +1,66 @@
 """
-Módulo: ingest.py
-Autor: Tamara
-Descripción:
-    Ingestión automática de datos meteorológicos para todas las ciudades
-    definidas en la configuración del proyecto.
+================================================================================
+MÓDULO: ingest.py
+PROYECTO: Sistema de Predicción Meteorológica Híbrida (OpenMeteo-SQLite)
+AUTOR: Tamara
+DESCRIPCIÓN:
+    Script de alto nivel encargado de ejecutar la ingesta masiva de datos. 
+    Implementa una estrategia de carga en dos fases para optimizar las llamadas
+    a la API de Open-Meteo y garantizar que no existan lagunas temporales.
 
-    Este módulo:
-        - Recorre la lista CIUDADES del config
-        - Descarga datos históricos desde Open-Meteo (downloader oficial)
-        - Añade el nombre de la estación
-        - Guarda los datos en SQLite mediante insertar_en_db()
+ESTRATEGIA DE CARGA:
+    1. Fase Histórica (Bloque 1): Descarga masiva desde el año 2000 hasta ayer.
+       Utiliza 'modo_append=False' para limpiar la base de datos y evitar 
+       duplicados antiguos.
+    2. Fase de Actualización (Bloque 2): Descarga el día actual y el horizonte
+       de pronóstico. Utiliza 'modo_append=True' para añadir esta información
+       al bloque histórico sin borrarlo.
 
-    Se utiliza para poblar la base de datos completa de forma masiva.
+SEGURIDAD:
+    - Implementa pausas de cortesía (time.sleep) para cumplir con las políticas
+      de uso de la API gratuita y evitar bloqueos por IP.
+================================================================================
 """
 
-from data.downloader import descargar_datos_openmeteo
-from data.cleaning import clean_df
-from db.database import insertar_en_db
-from config.config import CIUDADES
-
+import time
+from datetime import date, timedelta
+from config.config import CIUDADES, START_DATE, END_DATE
+from data.get_data import get_data
 
 def ingest():
     """
-    Descarga y guarda datos para todas las ciudades definidas en CIUDADES.
-    
-    Flujo detallado:
-        1. iterar sobre cada ciudad definida en la configuración.
-        2. Extraer nombre, latitud y longitud.
-        3. Descargar datos hitóricos usando el downloades oficial.
-        4. Validar que la descarga no esté vacía.
-        5. Limpiar el DataFrame con clean_df().
-        6. Añadir la columna 'estación' para identificar la ciudad.
-        7. Insertar los datos en la base de datis mediante insertar_en_db().
+    Ejecuta el ciclo completo de descarga y almacenamiento para todas las 
+    ciudades configuradas.
     """
+    print(f">>> 🔄 INICIANDO CARGA TOTAL (2000 - PRESENTE)")
+    
+    # Calculamos la fecha de ayer para cerrar el bloque histórico de la API Archive
+    ayer = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # Recorrer todas las ciudades configuradas en config.CIUDADES
     for ciudad in CIUDADES:
-        # Extraer parámetros de la ciudad
         nombre = ciudad["nombre"]
-        lat = ciudad["lat"]
-        lon = ciudad["lon"]
+        lat, lon = ciudad["lat"], ciudad["lon"]
 
-        print(f"\n Descargando datos de {nombre}...")
+        # -----------------------------------------------------------------------
+        # BLOQUE 1: PROCESAMIENTO HISTÓRICO
+        # -----------------------------------------------------------------------
+        # Este bloque descarga el grueso de los datos (años de registros).
+        # Se usa la API de Archivo Histórico de Open-Meteo.
+        print(f"\n📚 Bloque 1: Procesando historial para {nombre}...")
+        get_data(nombre, lat, lon, fecha_ini=START_DATE, fecha_fin=ayer, modo_append=False)
+        
+        # Pausa de seguridad: Vital para prevenir errores 429 (Too Many Requests)
+        print("☕ Esperando 5 segundos para refrescar conexión...")
+        time.sleep(5)
 
-        # Descargar datos históricos desde Open-Meteo
-        df = descargar_datos_openmeteo(lat, lon)
+        # -----------------------------------------------------------------------
+        # BLOQUE 2: PROCESAMIENTO DE FORECAST Y DATOS RECIENTES
+        # -----------------------------------------------------------------------
+        # Este bloque cubre el día de hoy y los días futuros de pronóstico.
+        # Al usar modo_append=True, estos datos se "pegan" al final del histórico.
+        print(f"📡 Bloque 2: Añadiendo datos recientes y pronóstico...")
+        get_data(nombre, lat, lon, fecha_ini=END_DATE, fecha_fin=END_DATE, modo_append=True)
 
-        # Validación: si la Api devolvió un DataFrame vacío, no se inserta nada
-        if df.empty:
-            print(f" ⚠ No se guardaron datos para {nombre} (vacío).")
-            continue
-
-        # Limpiar en DF (manejo de nulos, fechas, rangos físicos, etc)
-        df = clean_df(df)
-
-        # Añadir columna con el nombre de la estación para identificar la ciudad
-        df["estacion"] = nombre
-
-        # Insertar los datos limpios en la base de datos SQLite
-        insertar_en_db(df, nombre)
-
-        print(f" ✔ Datos de {nombre} guardados correctamente.")
-
-# Permite ejecutar la ingesta directamente desde terminal.
 if __name__ == "__main__":
+    # Punto de entrada para ejecución manual: 'python ingest.py'
     ingest()

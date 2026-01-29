@@ -1,59 +1,66 @@
 """
-Módulo: muestreo.py
-Autor: Tamara
-Descripción:
-    Funciones de muestreo temporal para equilibrar datasets meteorológicos.
-    Este módulo implementa un muestreo mensual real, seleccionando un número
-    fijo de días por cada combinación año-mes, manteniendo la estructura 
-    temporal y evitando sesgos por meses con más datos.
+================================================================================
+MÓDULO: muestreo.py
+PROYECTO: Sistema de Predicción Meteorológica Híbrida (OpenMeteo-SQLite)
+AUTOR: Tamara
+DESCRIPCIÓN:
+    Implementa estrategias de muestreo temporal para el balanceo y la reducción
+    eficiente de datasets meteorológicos de gran escala (series desde el 2000).
     
-    Útil para:
-        - Entrenamiento de modelos mensuales.
-        - Balanceo de datasets históricos.
-        - Reducción controlada del tamaño del dataset
+LÓGICA DE NEGOCIO:
+    A diferencia de un muestreo aleatorio tradicional, este módulo utiliza un
+    enfoque de "Ventana Final Mensual". Selecciona un bloque consecutivo de días
+    al final de cada mes, lo que permite:
+    1. Mantener la estructura de serie temporal (localmente).
+    2. Evitar el sesgo de estacionalidad (todos los meses pesan lo mismo).
+    3. Reducir el coste computacional del entrenamiento del XGBoost.
+
+CASOS DE USO:
+    - Entrenamiento de modelos en "Modo Mensual".
+    - Validación cruzada manteniendo la coherencia temporal.
+    - Creación de datasets de prueba equilibrados.
+================================================================================
 """
 
 import pandas as pd
 
-def muestreo_mensual(df, dias_por_mes=20, random_state=42):
+def muestreo_mensual(df, dias_por_mes=20):
     """
-    Realiza un muestreo equilibrado por mes y año.
-    
-    Parámetros:
-        df (pd.dataFrame): dataFrame con una columna 'time'.
-        dias_por_mes (int): Número máximo de días a muestrear por mes
-        random_state (int): semilla para garantizar reproducibilidad.
-    
-    Flujo detallado:
-        1. Copiar el DataFrame para no modificar el origunal.
-        2. Convertir la columna 'time' a datetime.
-        3. Eliminar filas sin fecha válida.
-        5. Agrupar por (año, mes).
-        6. En cada grupo, muestrea hasta 'dias_por_mes' filas.
-        7. Unir los resultados en jun DataFrame final balanceado.
+    Realiza un muestreo estratificado por mes, seleccionando bloques finales
+    consecutivos para preservar la inercia climática local.
+
+    Args:
+        df (pd.DataFrame): Dataset original con columna 'time'.
+        dias_por_mes (int): Cantidad de registros consecutivos a extraer por mes.
+                            Por defecto 20 días (aprox. 66% del mes).
+
+    Returns:
+        pd.DataFrame: Dataset equilibrado y ordenado cronológicamente.
     """
-    
-    # Ciopia defensiva para evitar modificar el DataFrame original.
+    # ---------------------------------------------------------------------------
+    # 1. PREPARACIÓN Y ORDENAMIENTO
+    # ---------------------------------------------------------------------------
     df = df.copy()
+    df["time"] = pd.to_datetime(df["time"])
     
-    # Convertir la columna 'time' a datetime; valores inválidos -> NaT
-    df["time"] = pd.to_datetime(df["time"], errors="coerce")
+    # El orden cronológico es crítico antes de aplicar iloc
+    df = df.sort_values("time")
     
-    # Eliminar filas sin fecha válida
-    df = df.dropna(subset=["time"])
-
-    # Extraer año y mes para agrupar correctamente
-    df["year"] = df["time"].dt.year
-    df["month"] = df["time"].dt.month
-
-    # Muestreo mensual REAL:
-    #   - Agrupa por año y mes
-    #   - En cada grupo, toma un máximo de 'dias_por_mes' muestras
-    #   -Si el mes tiene menos días disponibles, toma todos
-    df_bal = (
-        df.groupby(["year", "month"], group_keys=False)
-            .apply(lambda x: x.sample(n=min(dias_por_mes, len(x)), random_state=random_state))
-            .reset_index(drop=True)
+    # ---------------------------------------------------------------------------
+    # 2. APLICACIÓN DE MUESTREO POR VENTANA (STRATIFIED TAIL)
+    # ---------------------------------------------------------------------------
+    # Agrupamos por año y mes para tratar cada bloque mensual como una unidad.
+    # Usamos .apply con iloc negativo para capturar el cierre de cada mes.
+    df_bal = df.groupby(
+        [df["time"].dt.year, df["time"].dt.month], 
+        group_keys=False
+    ).apply(
+        lambda x: x.iloc[-dias_por_mes:] if len(x) >= dias_por_mes else x
     )
-
-    return df_bal
+    
+    # ---------------------------------------------------------------------------
+    # 3. LIMPIEZA DE ÍNDICES
+    # ---------------------------------------------------------------------------
+    # Devolvemos un DataFrame limpio, listo para ser inyectado en el modelo.
+    print(f"📉 Muestreo completado: Dataset reducido a {len(df_bal)} registros.")
+    return df_bal.reset_index(drop=True)

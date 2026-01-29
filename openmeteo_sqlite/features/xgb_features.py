@@ -1,198 +1,137 @@
 """
-Módulo: xgb_features.py
-Autor: Tamara (versión estable multiciudad – FIX FORECAST)
-Descripción:
-    Generación de features para XGBoost basadas en:
-        - Tiempo (dayofyear, month, dayofweek, senos y cosenos estacionales)
-        - Predicción SARIMA como feature adicional
-        - Residuo (real o pedicho)
-        - Lags y rollings del residuo por ciudad
-        
-    Este módulo prepare tanto:
-        - Features opara entrenamiento/evaluación
-            - Features futuras para forecast híbrido SARIMA + XGB
+================================================================================
+MÓDULO: xgb_features.py
+PROYECTO: Sistema de Predicción Meteorológica Híbrida (OpenMeteo-SQLite)
+AUTOR: Tamara
+DESCRIPCIÓN:
+    Este módulo realiza la Ingeniería de Variables (Feature Engineering). 
+    Transforma las series temporales brutas en un conjunto de predictores 
+    enriquecidos para el modelo XGBoost, incluyendo señales cíclicas, 
+    tendencias meteorológicas y retardos de error (lags).
+
+FUNCIONALIDADES CLAVE:
+    1. Codificación Ciclo-Estacional: Uso de funciones seno/coseno para que el 
+       modelo entienda que el 31 de diciembre y el 1 de enero son días cercanos.
+    2. Memoria de Error (Lags): Captura la persistencia del residuo del SARIMA
+       para corregir desviaciones sistemáticas a corto plazo.
+    3. Análisis de Tendencia: Calcula diferencias (diff) y aceleraciones para 
+       detectar cambios bruscos en la presión o la temperatura.
+    4. Adaptación Geográfica: Lógica específica para Santander (viento norte/sur).
+
+ESTRATEGIA DE PREDICCIÓN:
+    Soporta generación recursiva (día a día) permitiendo inyectar pronósticos
+    meteorológicos externos para mejorar la precisión del horizonte futuro.
+================================================================================
 """
 
 import pandas as pd
 import numpy as np
 
-
-#---------------------------------------------------------------------------------
-# FEATURES PARA ENTRENAMIENTO / EVALUACIÓN
-#---------------------------------------------------------------------------------
-
 def preparar_features_xgb(df, modo_entrenamiento=True):
     """
-    Genera features XGBoost coherentes para entrenamiento.
-    
-    IMPORTANTE:
-        - Los lags y rollings se calculan POR CIUDAD.
-        - La función no altera el DataFrame original.
-        - En modo entrenamiento se exige que exista 'residuo'.
-        
-    Parámetros:
-        df: pd.dataFrame
-            Debe contenr al menos:
-                - 'time'
-                - 'estación'
-                - 'residuo' ( si modo_entrenamiento=True)
-        
-        modo_entrenamiento : bool
-            Si True -> exige residuo y elimina filas con Nan en lags/sollrollings
-            Si False -> permite nan en ersiduo, útil para forecast.
-    
-    Retorna:
-        pd.DataFrame
-            dataFrame con todas las features generadas.
+    Transforma el DataFrame original en una matriz de entrenamiento/predicción.
     """
-
-    # Copia defensiva para no modificar el DataFrame original
     df = df.copy()
-    
-    # Ordenar por ciudad u fecha para garantizar coherencia temporal
+    # Aseguramos el orden cronológico por estación para que los 'diff' y 'shift' sean correctos
     df = df.sort_values(["estacion", "time"]).reset_index(drop=True)
 
-    #---------------------------------------------------------------------------------
-    # Features temporales
-    #---------------------------------------------------------------------------------
-    # Día del año
+    # ---------------------------------------------------------------------------
+    # 1. FEATURES TEMPORALES (Ciclos Estacionales)
+    # ---------------------------------------------------------------------------
+    # Convertimos el día del año en coordenadas circulares
     df["dayofyear"] = df["time"].dt.dayofyear
-    
-    # Mes (1-12)
     df["month"] = df["time"].dt.month
-    
-    # Dia de la semana (0-6)
     df["dayofweek"] = df["time"].dt.dayofweek
-    
-    # Componentes estacionales (ciclo anual)
-    df["sin_doy"] = np.sin(2 * np.pi * df["dayofyear"] / 365)
-    df["cos_doy"] = np.cos(2 * np.pi * df["dayofyear"] / 365)
+    df["sin_doy"] = np.sin(2 * np.pi * df["dayofyear"] / 365.25)
+    df["cos_doy"] = np.cos(2 * np.pi * df["dayofyear"] / 365.25)
 
-    #---------------------------------------------------------------------------------
-    # Lags y rollings del RESIDUO (por ciudad)
-    #---------------------------------------------------------------------------------
-    lags = [1, 3, 7, 14]
-    rollings = [3, 7, 14]
+    # ---------------------------------------------------------------------------
+    # 2. LAGS DEL RESIDUO (Memoria de error del SARIMA)
+    # ---------------------------------------------------------------------------
+    # El modelo aprende del error que cometió ayer y anteayer
+    lags_res = [1, 2] 
+    if "residuo" in df.columns:
+        for lag in lags_res:
+            df[f"residuo_lag_{lag}"] = df.groupby("estacion")["residuo"].shift(lag)
+    else:
+        # En fase inicial o forecast puro donde no hay residuo real
+        for lag in lags_res:
+            df[f"residuo_lag_{lag}"] = 0.0
 
-    # Lags del residuos
-    for lag in lags:
-        df[f"residuo_lag_{lag}"] = (
-            df.groupby("estacion")["residuo"].shift(lag)
-        )
+    # ---------------------------------------------------------------------------
+    # 3. METEOROLOGÍA AVANZADA (Tendencias e Inercia)
+    # ---------------------------------------------------------------------------
+    meteo_cols = ["wind_direction_10m_dominant", "relative_humidity_2m", "surface_pressure", "wind_speed_10m"]
 
-    # Rollings del residuo (media y desviación)
-    for r in rollings:
-        # se usa shift(1) para evitar fuga de información
-        serie = df.groupby("estacion")["residuo"].shift(1)
+    for col in meteo_cols:
+        if col in df.columns:
+            df[f"feat_{col}"] = df[col].astype(float)
+            # Diferencia simple: Detecta si la variable sube o baja respecto a ayer
+            df[f"diff_{col}"] = df.groupby("estacion")[col].diff().fillna(0)
+        else:
+            df[f"feat_{col}"] = 0.0
+            df[f"diff_{col}"] = 0.0
 
-        df[f"residuo_roll_mean_{r}"] = serie.rolling(r).mean()
-        df[f"residuo_roll_std_{r}"] = serie.rolling(r).std()
+    # ---------------------------------------------------------------------------
+    # 4. MEJORAS ESPECÍFICAS PARA SANTANDER (Lógica Geográfica)
+    # ---------------------------------------------------------------------------
+    if "wind_direction_10m_dominant" in df.columns:
+        # Transformación circular: El viento de componente Norte (mar) suele ser
+        # más fresco en verano y estable en invierno que el componente Sur.
+        rad = np.deg2rad(df["wind_direction_10m_dominant"].astype(float))
+        df["feat_viento_norte"] = np.cos(rad) # +1 es Norte puro, -1 es Sur puro
+        df["feat_viento_este"] = np.sin(rad)
 
-    #---------------------------------------------------------------------------------
-    # SARIMA como feature
-    #---------------------------------------------------------------------------------
+    if "surface_pressure" in df.columns:
+        # Tendencia de presión a 3 días: Clave para detectar frentes atlánticos
+        df["diff_pressure_3d"] = df.groupby("estacion")["surface_pressure"].diff(3).fillna(0)
+
+    if "temperature_2m_mean" in df.columns:
+        # Aceleración térmica: ¿Se está calentando el ambiente más rápido que ayer?
+        df["accel_temp"] = df.groupby("estacion")["temperature_2m_mean"].diff().shift(1).fillna(0)
+
+    # ---------------------------------------------------------------------------
+    # 5. POST-PROCESAMIENTO Y LIMPIEZA
+    # ---------------------------------------------------------------------------
     if "sarima_pred" in df.columns:
         df["sarima_pred"] = df["sarima_pred"].astype(float)
 
-    #---------------------------------------------------------------------------------
-    # Limpieza final
-    #---------------------------------------------------------------------------------
-    # En entrenamiento se exige residuo y todos los lags/rollings completos
     if modo_entrenamiento:
-        columnas_requeridas = ["residuo"]
+        # Eliminamos filas iniciales donde los lags son NaN (sin historia previa)
+        cols_con_lags = [c for c in df.columns if "lag_" in c]
+        df = df.dropna(subset=cols_con_lags)
     else:
-        columnas_requeridas = []
-
-    # Eliminar filas con NaN en residuo o en cualquier lag/rolling
-    df = df.dropna(
-        subset=columnas_requeridas + [
-            c for c in df.columns if "lag_" in c or "roll_" in c
-        ]
-    )
+        # En modo producción rellenamos para evitar que el XGBoost rechace la fila
+        df = df.ffill().bfill().fillna(0)
 
     return df.reset_index(drop=True)
 
-#---------------------------------------------------------------------------------
-# FEATURES FUTURAS PARA FORECAST (FIX DEFINITIVO)
-#---------------------------------------------------------------------------------
-
-def generar_features_futuras(historial, sarima_preds, step):
+def generar_features_futuras(historial, sarima_preds, step, meteo_futura=None):
     """
-    Genera UNA fila de features futuras para XGBoost
-    Usado en forecast híbrido SARIMA + XGB.
-
-    Lógica:
-        - Usa residuo_pred si existe (forecast previo)
-        - Si no, usa residuo real
-        - Si no existe ninguno, usa 0 (primer paso)
-        
-    Parámetros:
-        historical: pd.dataFrame
-            Debe contener:
-                - 'time'
-                - 'estacion'
-                - 'residuo' o 'residuo_pred'
-        
-        sarima_preds : list[float]
-            predicciones SARIMA ya generadas para el horizonte completo
-        
-        step: int
-            paso futuo actual (1 = primer día futuro).
-    
-    Retorna:
-        pd.DataFrame
-            Una sola fila con todas las features necesarias para XGB.
+    Crea el conjunto de variables para el 'día siguiente' en un bucle recursivo.
     """
-
-    # Copia defensiva y orden temporal
     df = historial.copy()
-    df = df.sort_values(["estacion", "time"]).reset_index(drop=True)
+    ultima_fecha = df["time"].max()
+    fecha_futura = ultima_fecha + pd.Timedelta(days=1)
+    
+    # Construcción de la fila de predicción
+    nueva_fila_dict = {
+        "time": fecha_futura,
+        "estacion": df["estacion"].iloc[0],
+        "sarima_pred": float(sarima_preds[step - 1]),
+        "temperature_2m_mean": float(sarima_preds[step - 1]) 
+    }
 
-    # Última fila del historial ( base para generar la futura)
-    ultima = df.iloc[-1:].copy()
-
-    # Fecha futura asociada al paso actual
-    fecha = pd.to_datetime(ultima["time"].values[0])
-
-    #---------------------------------------------------------------------------------
-    # Features temporales
-    #---------------------------------------------------------------------------------
-    ultima["dayofyear"] = fecha.dayofyear
-    ultima["month"] = fecha.month
-    ultima["dayofweek"] = fecha.dayofweek
-
-    ultima["sin_doy"] = np.sin(2 * np.pi * ultima["dayofyear"] / 365)
-    ultima["cos_doy"] = np.cos(2 * np.pi * ultima["dayofyear"] / 365)
-
-    #---------------------------------------------------------------------------------
-    # SARIMA futuro
-    #---------------------------------------------------------------------------------
-    ultima["sarima_pred"] = sarima_preds[step - 1]
-
-    #---------------------------------------------------------------------------------
-    # Residuo base (CLAVE)
-    #---------------------------------------------------------------------------------
-    if "residuo_pred" in df.columns:
-        residuo_base = df["residuo_pred"]
-    elif "residuo" in df.columns:
-        residuo_base = df["residuo"]
-    else:
-        # Primer paso del forecast -> no hay residuo previo
-        residuo_base = pd.Series(0.0, index=df.index)
-
-    #---------------------------------------------------------------------------------
-    # Lags de residuo
-    #---------------------------------------------------------------------------------
-    for lag in [1, 3, 7, 14]:
-        ultima[f"residuo_lag_{lag}"] = residuo_base.shift(lag).iloc[-1]
-
-    #---------------------------------------------------------------------------------
-    # Rollings de residuo
-    #---------------------------------------------------------------------------------
-    for r in [3, 7, 14]:
-        serie = residuo_base.shift(1)
-
-        ultima[f"residuo_roll_mean_{r}"] = serie.rolling(r).mean().iloc[-1]
-        ultima[f"residuo_roll_std_{r}"] = serie.rolling(r).std().iloc[-1]
-
-    return ultima.reset_index(drop=True)
+    # Integración de datos de pronóstico (ej: Open-Meteo Forecast)
+    if meteo_futura is not None:
+        for col, val in meteo_futura.items():
+            nueva_fila_dict[col] = val
+    
+    nueva_fila = pd.DataFrame([nueva_fila_dict])
+    
+    # Unimos para que 'preparar_features_xgb' pueda calcular 'diff' y 'lags'
+    df_completo = pd.concat([df, nueva_fila], ignore_index=True)
+    df_feat = preparar_features_xgb(df_completo, modo_entrenamiento=False)
+    
+    # Solo devolvemos la última fila, que es la que el modelo debe procesar
+    return df_feat.tail(1)

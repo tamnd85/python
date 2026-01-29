@@ -1,108 +1,123 @@
 """
-Módulo: main.py
-Autor: tamara
-Descripción:
-    Punto de entrada principal del proyecto OpenMeteo.
-    
-    Permite ejecutar desde el terminal:
-        - ingest: poblar la base de datos con datos hitóricos
-        - train: entrenar modelos SARIMA + XGB
-        - forecast: predecir futuro para una ciudad concreta
-        - all: ejecutar ingest + train + forecast en una sola llamada
-    
-    Este script actúa como interfaz CLI del sistema completo
+================================================================================
+MÓDULO: main.py
+PROYECTO: Sistema de Predicción Meteorológica Híbrida (CLI)
+AUTOR: Tamara
+DESCRIPCIÓN:
+    Interfaz de línea de comandos que orquesta las tres fases del proyecto:
+    Ingesta, Entrenamiento y Predicción.
+
+FLUJO DE TRABAJO DINÁMICO:
+    - Ingest: Sincroniza la base de datos local con la API de OpenMeteo.
+    - Train: Ejecuta el pipeline dual (SARIMA por ciudad + XGBoost global).
+    - Forecast: Genera el pronóstico híbrido aplicando la corrección por viento.
+    - All: Ejecuta el ciclo completo de vida de los datos.
+
+USO DESDE TERMINAL:
+    python main.py forecast --ciudad "Santander" --dias 7
+================================================================================
 """
 
 import argparse
+import sys
 
 from data.ingest import ingest
-from pipeline.train import entrenar_modelos
 from pipeline.forecast import predecir_hibrido
+from pipeline.train import entrenar_modelos, entrenar_modelos_mensual
 
-# Valores por defcto definidos en config
+# Valores por defecto centralizados para facilitar el mantenimiento
 from config.config import ESTACION_DEFAULT, DIAS_DEFAULT
 
-
 def main():
-    """
-    Punto de entrada del CLI
-    
-    Flujo:
-        1. Crear parse de arvumentos.
-        2. Leer acción solicitada por el usuario.
-        3. Ejecutar la acción correspondiente:
-            - ingest
-            - train
-            -forecast
-            -all
-    """
     parser = argparse.ArgumentParser(
-        description="Sistema de predicción meteorológica OpenMeteo"
+        description="Sistema de predicción meteorológica híbrido OpenMeteo + SARIMA + XGBoost"
     )
 
+    # Argumento principal: define qué motor del sistema encender
     parser.add_argument(
         "accion",
         choices=["ingest", "train", "forecast", "all"],
-        help="Acción a ejecutar"
+        help="Acción a ejecutar: ingest (datos), train (modelos), forecast (predicción) o all (ciclo completo)"
     )
 
-    # Ciudad opcinal (solo para forecast)
+    # Argumentos opcionales para personalizar la ejecución
     parser.add_argument(
         "--ciudad",
         type=str,
-        help="Ciudad para forecast (opcional, usa config si no se pasa)"
+        help="Nombre de la estación/ciudad para el forecast (por defecto configurada en config.py)"
     )
 
-    # Número de dás opcional (solo para forecast)
     parser.add_argument(
         "--dias",
         type=int,
-        help="Número de días a predecir (opcional, usa config si no se pasa)"
+        help="Número de días a predecir (máximo recomendado: 7-14 días)"
     )
 
     args = parser.parse_args()
 
-    #-------------------------------------------------------------
-    #  ACCIONES DISPONIBLES
-    #-------------------------------------------------------------
+    # Resolución de parámetros: Prioridad -> Argumento de consola > Configuración por defecto
+    ciudad = args.ciudad if args.ciudad else ESTACION_DEFAULT
+    dias = args.dias if args.dias else DIAS_DEFAULT
 
+    #---------------------------------------------------------------------------
+    # ORQUESTACIÓN DE ACCIONES
+    #---------------------------------------------------------------------------
+
+    # 1. INGESTA: Sincronización de BD
     if args.accion == "ingest":
-        print("Ejecutando ingest base...")
+        print(">>> 🔄 Ejecutando sincronización de datos (Histórico + Forecast de Viento)...")
         ingest()
 
+    # 2. ENTRENAMIENTO: Re-ajuste de pesos y estacionalidad
     elif args.accion == "train":
+        print(">>> 🧠 Iniciando entrenamiento DUAL...")
+        print("1. Entrenando modelos NORMALES (Serie completa)...")
         entrenar_modelos()
+        
+        print("\n2. Entrenando modelos MENSUALES (Muestreo de tendencia)...")
+        entrenar_modelos_mensual(dias_por_mes=25)
+        print("\n[OK] Modelos actualizados y listos para inferencia.")
 
+    # 3. PREDICCIÓN: El corazón del sistema híbrido
     elif args.accion == "forecast":
-        # Si no se pasan argumentos → usar valores del config
-        ciudad = args.ciudad if args.ciudad else ESTACION_DEFAULT
-        dias = args.dias if args.dias else DIAS_DEFAULT
+        # Estrategia de frescura: si pedimos predicción a corto plazo,
+        # obligamos a descargar el viento más reciente para mayor precisión.
+        if dias <= 7:
+            print(f">>> 📡 Refrescando pronóstico de viento real para {ciudad}...")
+            ingest() 
 
-        print(f"Usando ciudad: {ciudad}")
-        print(f"Usando días: {dias}")
+        print(f"\n>>> 🔮 Generando predicción para: {ciudad} ({dias} días)")
 
-        # Ejecutar forecast híbrido
-        df_pred = predecir_hibrido(ciudad, dias)
+        # Inferencia Modo Normal: Ajuste fino y corrección de "zigzag"
+        print("\n--- PREDICCIÓN NORMAL (7 DÍAS REALISTAS) ---")
+        df_pred = predecir_hibrido(ciudad, dias, modo="normal")
         print(df_pred)
+        
+        # Inferencia Modo Mensual: Visión de largo plazo / tendencia
+        try:
+            print("\n--- PREDICCIÓN MENSUAL (TENDENCIA) ---")
+            df_pred_mensual = predecir_hibrido(ciudad, dias, modo="mensual")
+            print(df_pred_mensual)
+        except Exception as e:
+            print(f"\n[!] Modelo mensual no disponible o error en datos: {e}")
 
+    # 4. ALL: Automatización total
     elif args.accion == "all":
-        # Pipeline completo
-        print("=== INGEST ===")
+        print("=== 🚀 INICIANDO PIPELINE COMPLETO (End-to-End) ===")
+        
+        print("\n[PASO 1] INGEST & SYNC")
         ingest()
 
-        print("=== TRAIN ===")
+        print("\n[PASO 2] TRAIN (DUAL)")
         entrenar_modelos()
+        entrenar_modelos_mensual(dias_por_mes=25)
 
-        ciudad = args.ciudad if args.ciudad else ESTACION_DEFAULT
-        dias = args.dias if args.dias else DIAS_DEFAULT
-
-        print("=== FORECAST ===")
-        df_pred = predecir_hibrido(ciudad, dias)
+        print("\n[PASO 3] FORECAST FINAL")
+        df_pred = predecir_hibrido(ciudad, dias, modo="normal")
         print(df_pred)
 
-#-------------------------------------------------------------
-#  EJECUCCIÖN DIRECTA
-#-------------------------------------------------------------
-
+#---------------------------------------------------------------------------
+# ENTRY POINT
+#---------------------------------------------------------------------------
 if __name__ == "__main__":
     main()
