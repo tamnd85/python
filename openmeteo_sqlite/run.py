@@ -9,8 +9,12 @@ Descripción:
         - Probar el pipeline de predicción sin necsidad de argumentos.
         - obtener un dataFrame con las predicciones futuras
     
-    Uso típico:
+Uso típico:
     python run.py
+    
+Nota:
+    Este módulo es ideal para pruebas rápidas, validación de modelos y
+    automatizaciones ligeras sin pasar por el CLI completo.
 """
 
 from pipeline.forecast import predecir_hibrido

@@ -1,15 +1,14 @@
 """
-================================================================================
-MÓDULO: xgb_features.py
-PROYECTO: Sistema de Predicción Meteorológica Híbrida (OpenMeteo-SQLite)
-AUTOR: Tamara
-DESCRIPCIÓN:
-    Este módulo realiza la Ingeniería de Variables (Feature Engineering). 
-    Transforma las series temporales brutas en un conjunto de predictores 
-    enriquecidos para el modelo XGBoost, incluyendo señales cíclicas, 
-    tendencias meteorológicas y retardos de error (lags).
+Módulo: xgb_features.py
+Proyecto: Sistema de Predicción Meteorológica Híbrida (OpenMeteo-SQLite)
+Autor: Tamara
+Descripción:
+    -Este módulo realiza la Ingeniería de Variables (Feature Engineering). 
+    -Transforma las series temporales brutas en un conjunto de predictores 
+    enriquecidos para el modelo XGBoost, incluyendo señales cíclicas, tendencias
+    meteorológicas y retardos de error (lags).
 
-FUNCIONALIDADES CLAVE:
+Funcionalidades clave:
     1. Codificación Ciclo-Estacional: Uso de funciones seno/coseno para que el 
        modelo entienda que el 31 de diciembre y el 1 de enero son días cercanos.
     2. Memoria de Error (Lags): Captura la persistencia del residuo del SARIMA
@@ -18,10 +17,10 @@ FUNCIONALIDADES CLAVE:
        detectar cambios bruscos en la presión o la temperatura.
     4. Adaptación Geográfica: Lógica específica para Santander (viento norte/sur).
 
-ESTRATEGIA DE PREDICCIÓN:
+Estrategia de predicción:
     Soporta generación recursiva (día a día) permitiendo inyectar pronósticos
     meteorológicos externos para mejorar la precisión del horizonte futuro.
-================================================================================
+
 """
 
 import pandas as pd
@@ -30,6 +29,20 @@ import numpy as np
 def preparar_features_xgb(df, modo_entrenamiento=True):
     """
     Transforma el DataFrame original en una matriz de entrenamiento/predicción.
+    
+    Parámetros:
+        df: pd.dataFrame
+            Debe contener al menos:
+                - 'time'
+                - 'estación'
+                - Variables meteorológicas relevantes
+        modo_entrenamiento: bool
+        Si True, elimina filas con NaNs en lags.
+        Si False, rellena huecos para predicción recursiva.
+
+    Retorna:
+        pd.DataFrame
+            DataFrame enriquecido con todas las features necesarias para XGBoost.
     """
     df = df.copy()
     # Aseguramos el orden cronológico por estación para que los 'diff' y 'shift' sean correctos
@@ -109,7 +122,20 @@ def preparar_features_xgb(df, modo_entrenamiento=True):
 
 def generar_features_futuras(historial, sarima_preds, step, meteo_futura=None):
     """
-    Crea el conjunto de variables para el 'día siguiente' en un bucle recursivo.
+    Genera features del 'día siguiente' para predicción recursiva XGBoost
+    
+    Parámetros:
+        historial: pd.dataFrame
+            Histórico ya procesado con features previas.
+        sarima_preds : list[float]
+            Predicciones SARIMA para cada paso futuro.
+        step : int
+            Índice del día futuro a generar (1 = primer día).
+        meteo_futura: dict,opcional
+            Variables meteorológicas externas
+    Retorna
+        pd.DataFrame
+            Una única fila con todas las features necesarias para XGBoost
     """
     df = historial.copy()
     ultima_fecha = df["time"].max()

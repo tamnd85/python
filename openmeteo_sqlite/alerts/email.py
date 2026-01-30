@@ -1,14 +1,28 @@
 """
 Módulo: email.py
+Proyecto: Sistema de Predicción Meteorológica Híbrida (OpeneMeteo_Sqlite)
 Autor: Tamara
 Descripción:
     Configuración y envío de correos electrónicos para el sistema de alertas
     
-    Este módulo:
-        - Carga redenciales desde variables de entorno (.env)
-        - Construye mensajes MIME de texto plano
-        - Envía correos mediante SMTP seguro (SSL)
-        - Controla si el envío estña habilitadi mediante ALARM_EMAIL_ENABLED 
+    Este módulo prporciona una interfaz simple y segura para enviar alertas
+    meteorológicas por correo electrónico. El comportamiento del envío depende 
+    de variables de entorno definidas en el archivo .env, lo que permite activas
+    o desactivar el canal sin modificar el código.
+    
+Funcionalidades:
+    - carga de credenciales desde variables del entorno.
+    - Construcción de mensajes MIME de texto plano.
+    - Envío mediante SMTP seguro (SSL).
+    - Control de activación mediante ALARM_EMAIL_ENABLED.
+    
+Requisitos en .env:
+    ALARM_EMAIL_ENABLED=True/False
+    ALARM_EMAIL_FROM=correo_remitente
+    ALARM_EMAIL_TO=correo_destinatario
+    ALARM_:EMAIL:PASSWORD=contraseña_o_token
+    SMTP_SERVER=stmp.gmail.com (por defecto)
+    STMP_PORT=465 (por defecto)
 """
 import os
 import smtplib
@@ -18,21 +32,29 @@ from dotenv import load_dotenv
 # Carga las variables de entorno desde el archivo .env
 load_dotenv()
 
+#----------------------------------------------------------------------------
+# Función principal: envío de emails
+#----------------------------------------------------------------------------
 def enviar_email(asunto: str, mensaje: str) -> None:
     """
     Envía un email con un asunto y un mensaje de texto plano.
 
-    Requisitos:
-        - ALARM_EMAIL_ENABLED=True en el .env
-        - Variables ALARM_MAIL_FROM, ALARM_EMAIL_TO y ALARM_EMAIL_PASSWORD configuradas
-        - Servidor SMTP accesible (por defecto Gmail)
-        
     Flujo:
         1. Verifica si el envío de email está habilitado.
         2. Carga credenciales y configuración SMTP desde el entorno.
         3. Construye en mensaje MIME.
         4. Intenta enviar el correo usando SMTP_SSL.
         5. Maneja errores comunes (autenticación, otros).
+        
+    Parámetros:
+        asunto: str
+            Titulo del correo electrónico.
+        mensaje: str
+            Contenido del mensaje en texto plano
+            
+    Retorna
+        None
+            No retorna nada; solo ejecuta el envío si está habilitado.
     """
     
     #--------------------------------------------------------------------
@@ -62,7 +84,7 @@ def enviar_email(asunto: str, mensaje: str) -> None:
     #--------------------------------------------------------------------
     # 3. Construcción del mensaje MIME
     #--------------------------------------------------------------------
-    # MIMEText crea un email de texto plano.
+    # MIMEText crea un email de texto plano con cabeceras estándar.
     msg = MIMEText(mensaje)
     msg["Subject"] = asunto
     msg["From"] = remitente

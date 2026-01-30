@@ -1,20 +1,24 @@
 """
 ================================================================================
-MÓDULO: main.py
-PROYECTO: Sistema de Predicción Meteorológica Híbrida (CLI)
-AUTOR: Tamara
-DESCRIPCIÓN:
+Módulo: main.py
+proyecto: Sistema de Predicción Meteorológica Híbrida (CLI)
+Autor: Tamara
+Descripción:
     Interfaz de línea de comandos que orquesta las tres fases del proyecto:
     Ingesta, Entrenamiento y Predicción.
 
-FLUJO DE TRABAJO DINÁMICO:
+Flujo de trabajo:
     - Ingest: Sincroniza la base de datos local con la API de OpenMeteo.
     - Train: Ejecuta el pipeline dual (SARIMA por ciudad + XGBoost global).
     - Forecast: Genera el pronóstico híbrido aplicando la corrección por viento.
     - All: Ejecuta el ciclo completo de vida de los datos.
 
-USO DESDE TERMINAL:
+USO desde terminal:
     python main.py forecast --ciudad "Santander" --dias 7
+
+Nota:
+    Este módulo permite operar el sistema desde consola sin necesidad de abrir
+    notebooks ni scripts adicionales. Es la interfaz recomendada para producción.
 ================================================================================
 """
 
@@ -29,6 +33,10 @@ from pipeline.train import entrenar_modelos, entrenar_modelos_mensual
 from config.config import ESTACION_DEFAULT, DIAS_DEFAULT
 
 def main():
+    """
+    Punto de entrada del sistema CLI. Interpreta argumentos de consola y
+    ejecuta la acción correspondiente (ingest, train, forecast, all).
+    """
     parser = argparse.ArgumentParser(
         description="Sistema de predicción meteorológica híbrido OpenMeteo + SARIMA + XGBoost"
     )

@@ -1,12 +1,28 @@
 """
 Módulo: alert_sender.py
+Proyecto: Sistema de Predicción Meteorológica Híbrida (OpeneMeteo_Sqlite)
 Autor: Tamara
 Descripción:
     Envía alertas por Telegram y Email.
     
-    Este módulo centraliza el envío de notificaciones meteorológicas 
-    generadas por alert_rules.py. El envío depende de varables de entorno 
-    que permiten activar o descativar cada canal sin modificcar el código
+    Este módulo centraliza el envío de notificaciones meteorológicas  para las alertas
+    generadas por alert_rules.py. El comportamiento de cada canal de envío 
+    depende de variables de entorno, lo que permite activas po desactivar
+    Telegram y/o Email son midificar el código.
+
+Funcionamiento:
+    - Si no hay alertas, no se envía nada.
+    - Se construye un mensaje único con todas las alertas.
+    - Si TELEGRAM_ENABLED=True -> se envía por Telegram.
+    - SI ALARM_EMAIL_ENABLED=True -> se envía por Email.
+    
+Requisitos:
+    - Variables de entorno configuradas en .env:
+        TELEGRAM_ENABLED=True/False
+        ALARM_EMAIL_ENABLED=True/False
+    Módulos:
+        alerts.telegram.enviar_telegram()
+        alerts.email.enviar_email()
 """
 
 import os
@@ -19,14 +35,18 @@ def enviar_alertas(alertas):
     Envía una lista de alertas a los canales configurados.
     
     Flujo:
-        1. Si no hay alertas, no se envía nada.
-        2. Construye un único mensaje con todas las alertas.
-        3. Envía por Telegram si TELEGRAM_ENABLED=True en el entorno.
-        4. Envía por Email si ALARM_EMAIL_ENABLED=True en el entorno.
+        1. Validación: si no hay alertas, se aborta el envío.
+        2. CONstrucción de un único mensaje con todas las alertas.
+        3. Envío por Telegram si TELEGRAM_ENABLED=True.
+        4. Envío por Email si ALARM_EMAIL_ENABLED=True.
         
     Parámetros:
         alertas: lis[str]
-            Lista de amensajes de alerta generados por alert_rules detectar_alertas()
+            Lista de amensajes de alerta generados por alert_rules detectar_alertas().
+            
+    Retorna:
+        None
+            No retorna nada; solo ejecuta los envíos cnfigurados.
     """
 
     #------------------------------------------------------------- 

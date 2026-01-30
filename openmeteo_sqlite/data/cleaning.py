@@ -1,5 +1,6 @@
 """
 Módulo: cleaning.py
+Proyecto: Sistema de Predicción Meteorológica Híbrida (OpenMeteo-SQLite)
 Autor: Tamara
 Descripción:
     Este módulo centraliza la lógica de preprocesamiento y saneamiento de los
@@ -8,14 +9,17 @@ Descripción:
     listo para ser consumido por los modelos SARIMA y SGBoost.
     
 Funcionalidades clave:
-    1. Integridad Temporal: garantiza que la columna 'time' sea el eje central
-    sin duplicados, convirtiéndola a formato detetime de Pandas.
-    2. Gestión de Nulos: Implemente técnicas de limpieza selectiva para evitar
-    que filas vacías afecten al entrenamiento del modelo.
-    3. Tipado de Datos: Asegura que las variables físicas (temperatura, viento, 
-    presión) mantengan su precisión numérica (float64).
-    4. Normalización de Estaciones: Estandariza los nombres de las estaciones 
-    para búsquedas eficientes en la base de datos SQLite.
+    1. Integridad Temporal:
+        - Conversión robusta de la columna 'time' a datetime.
+        - Eliminación de duplicados y ordenación cronológica.
+    2. Gestión de Nulos: 
+        - Eliminación de columnas completamente vacías.
+        - Interpolación inteligente de valores numéricos.
+    3. Tipado de Datos:
+        - Conversión de todas las variablea físicas a float64 para grantizar
+        precisión numérica en los modelos.
+    4. Validación física:
+        - Corrección de valores imposibles (humedad >100%, presión se fuera de rango).
     
 Flujo de datos:
     Input: Dataframe de Pandas con datos brutos (Raw APi data).
@@ -31,14 +35,21 @@ Notas Técnicas
 import pandas as pd
 import numpy as np
 
+#-----------------------------------------------------------------------------------
+# Función principal de limpieza
+#-----------------------------------------------------------------------------------
+
 def clean_df(df):
     """
     Realiza una limpieza robusta sobre un DataFrame meteorológico.
     
-    Args:
-        df (pd.DataFrame): Datos brutos de la API.
-        modo_entrenamiento (bool): Si es False, no interpola la temperatura 
-                                   para permitir que el modelo la prediga.
+    Parámetros:
+        df: pd.dataFrame
+            datos brutos obtenidos de la API de OpenMeteo.
+    
+    Retorna:
+        pd.DataFrame
+            DataFrame limpio, consistenete y lkisto para la generación de features.
     """
     # Se trabaja sobre una copia para no modificar el DataFrame original.
     df = df.copy()
@@ -52,7 +63,6 @@ def clean_df(df):
 
     #---------------------------------------------------------------------------
     # # 2. NORMALIZACIÓN DE TIPOS NUMÉRICOS
-    # Convertimos a float64 todas las columnas meteorológicas para cálculos precisos.
     #---------------------------------------------------------------------------
     for col in df.columns:
         if col != "time": 

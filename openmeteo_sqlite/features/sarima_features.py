@@ -1,18 +1,19 @@
 """
 Módulo: sarima_features.py
+Proyecto: Sistema de Predicción Meteorológica Híbrida (OpenMeteo-SQLite)
 Autor: Tamara
 Descripción:
     Funciones para preparar la serie temporal univariada utilizada por el
-    modelo SARIMA. Se encarga de:
-        - seleccionar columnas relevantes
-        - limpiar fechas inválidas
-        - eliminar duplicados
-        - asegurar frecuencia diaria
-        - interpolar huecos
+    modelo SARIMA. Este módulo garantiza que la serie resultante sea:
+        -Consistente temporalmente
+        - Continua (sin huecos)
+        - Univariada ( solo temperatura)
+        -Libre de duplicados
+        - Con frecuencia diaria fija
+        - Sin valores faltantes tras interpolación
         
-    Este módulo garantiza que la serie resultante se consistente,
-    continua y adecuada para modelos SARIMA, que requieren una frecuencia
-    temporal fija y ausencia de valores faltantes.
+    Los modelos SARIMA requieren series limpias, ordenadas y con frecuencia
+    estrictamente regular. Este módulo asegura todas esas condiciones.
 """
 
 import pandas as pd

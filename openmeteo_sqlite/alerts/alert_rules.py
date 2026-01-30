@@ -1,15 +1,26 @@
 """
 Módulo: alert_rules.py
+Proyecto: Sistema de Predicción Meteorológica Híbrida (OpeneMeteo_Sqlite)
 Autor: Tamara
 Descripción:
-    Reglas de detección de alertas meteorológicas.
+    Reglas de detección de alertas meteorológicas basadas en predicciones 
+    híbridas o datos reales.
     
-    Este módulo implementa dos etapas:
-        1. Preparación del dataFrame para asegurar columnas mínimas
-        2. Detección de alertas basadas en reglas simples pero robustas.
-        
+    Este módulo implementa dos etapas fundamentales:
+        1. Preparación del DataFrame: 
+            - Normaliza la columna temporal.
+            - garantiza la existencia de columnas mínimas necesarias.
+            - Crea valores derivados cuando faltan (pred_hibrida, temp_min
+        2. Detección de alertas:
+            - Descenso brusco de temperatura.
+            - Riesgo de heladas.
+            
     Las alertas generadas pueden ser enviadas posteriormente mediante
     alert_sender.py (Telegram, email)
+    
+Flujo de uso:
+    df_preparado = preparar_df_alertas(df_pred)
+    alertas = detectar_alertas(df_preparado)
 """
 
 import pandas as pd
@@ -21,11 +32,12 @@ import pandas as pd
 
 def preparar_df_alertas(df_pred):
     """
-    Asegura que df_pred tiene las columnas necesarias para generar alertas.
+    Prepara un DataFrame de predicciones para garantiza que contiene las columnas 
+    mínimas necesarias paa la detección de alertas.
     
     Operaciones realizadas
-        - convertir 'time' a datetime y ordenar por fecha.
-        - Crear 'pred_hibrida' si no existe (usando 'hibrido'como fallback).
+        - convertir 'time' a datetime y ordenar cronológicamente.
+        - Crear 'pred_hibrida' si no existe (Fallback: columna 'hibrido').
         - Crear 'temperature_2m_min' si no existe (estimación: media -3ºC).
         
     Parámetros:
@@ -61,7 +73,8 @@ def preparar_df_alertas(df_pred):
         if "hibrido" in df.columns:
             df["pred_hibrida"] = df["hibrido"]
         else:
-            raise ValueError("df_pred no contiene 'pred_hibrida' ni 'hibrido'.")
+            raise ValueError("df_pred no contiene 'pred_hibrida' ni 'hibrido'."
+                            "No es posible generar sin una predicción base.")
 
     # ------------------------------------------------------------
     # Crear columna temperature_2m_min si no existe
@@ -84,7 +97,8 @@ def preparar_df_alertas(df_pred):
 
 def detectar_alertas(df_pred):
     """
-    Analiza un DataFrame de predicciones meteorológicas y genera alertas.
+    Analiza un DataFrame de predicciones meteorológicas y genera alertas meteorológicas basadasen
+    reglas simples pero robustas.
     
     Reglas implementadas:
         1) Descenso brusco de temperatura: 
@@ -94,11 +108,11 @@ def detectar_alertas(df_pred):
     
     Parámetros:
         df_pred: pd.DataFrame
-            DataFrame preparado por preparar_df_alertas()
+            DataFrame preparado por preparar_df_alertas().
             
     Retorna:
         list[str]
-            Lista de mensajes de alertas generados
+            Lista de mensajes de alertas generados.
     """
 
     # Lista donde se acumularán los mensajes de alerta generados

@@ -1,7 +1,20 @@
 """
-================================================================================
-MÓDULO: database.py (CORREGIDO - Case Insensitive)
-================================================================================
+Módulo: database.py
+proyecto: Sistema de Predicción Meteorológica Híbrida (OpenMeteo-SQLite)
+Autor: Tamara
+Descripción:
+    Módulo de gestión de persistencia en SQLite para el sistema meteorológico.
+    
+    Este módul implementa:
+        1. Creación automática de esquema si no existe.
+        2. Borrado seguro de registros por ciudad.
+        3. Inserción robusta de datos limpios en la base de datos.
+        4. REcuperación flexible de registros, ignorando mayúscula/minúscula.
+
+Objetivos:
+    - Gaerantizar consistencia en al bbdd.
+    - Evitar duplicados y errores por diferencias de capitalización.
+    - Asegurar que todas las fechas se almacenan en formato ISO (YYYY-MM-DD).
 """
 
 import sqlite3
@@ -13,6 +26,13 @@ from config.config import DB_PATH, TABLA_DB
 # -----------------------------------------------------------------------------
 
 def crear_tabla_si_no_existe():
+    """
+    Crea la tabla principal del sistema si aún no existe.
+    
+    La tabla contiene todas las variables meteorológicas necesarias para entranamiento,
+    forecast y análisis. Todas las fechas se alamacenan como  TEXTO en formato ISO para 
+    evitar problemas de epcoh en SQLite.
+    """
     conn = sqlite3.connect(DB_PATH)
     conn.execute(f"""
         CREATE TABLE IF NOT EXISTS {TABLA_DB} (
@@ -41,6 +61,13 @@ def crear_tabla_si_no_existe():
 # -----------------------------------------------------------------------------
 
 def borrar_ciudad(ciudad):
+    """
+    Elimina todos lso registros asociados a una ciudad, ignorando mayúsculas.
+    
+    Parámetros:
+        ciudad: str
+            Nombre de la ciudad a eliminar ( se normaliza en minúscula).
+    """
     crear_tabla_si_no_existe()
     conn = sqlite3.connect(DB_PATH)
     # Forzamos minúsculas para asegurar el borrado
@@ -59,12 +86,26 @@ def borrar_ciudad(ciudad):
 # -----------------------------------------------------------------------------
 
 def insertar_en_db(df, estacion):
+    """
+    Inserta un dataFrame en la base de datos, normalizando fechas y estación.
+    
+    Reglas:
+        - Las fechas se conviertn a ISo (YYYY-MM-DD).
+        - La estación se almacena siempre en minúsculas.
+        - Se descartan filas sin fecha válida.
+        
+    Parámetros:
+        df: pd.DataFrame
+            DataFrame limpio y listo para persistencia
+        estacion: str
+            Nombre de la ciudad/estación asociada a los registros.
+    """
     crear_tabla_si_no_existe()
     df = df.copy()
 
-    # REGLA DE ORO: Fechas ISO y estación en minúsculas
+    # Normalización obligatoria
     df['time'] = pd.to_datetime(df['time'], errors='coerce').dt.strftime('%Y-%m-%d')
-    df["estacion"] = estacion.lower() # <--- GUARDAMOS SIEMPRE EN MINÚSCULAS
+    df["estacion"] = estacion.lower()
     
     df = df.dropna(subset=['time'])
 
@@ -85,7 +126,16 @@ def insertar_en_db(df, estacion):
 
 def load_from_db(estacion=None):
     """
-    Recupera registros usando LOWER para ignorar mayúsculas/minúsculas.
+    Recupera registros desde SQLite, ignorando mayúsculas/minúsculas.
+    
+    Parámetros:
+        estación: str, opcional
+            Si se especifica, filtra por esa esatción.
+            Si no, devuleve toda la tablas.
+    
+    Retorna:
+        pd.DataFrame
+            dataFrame con los registros solicitados.
     """
     crear_tabla_si_no_existe()
     conn = sqlite3.connect(DB_PATH)

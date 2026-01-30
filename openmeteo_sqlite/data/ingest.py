@@ -1,25 +1,31 @@
 """
-================================================================================
-MÓDULO: ingest.py
-PROYECTO: Sistema de Predicción Meteorológica Híbrida (OpenMeteo-SQLite)
-AUTOR: Tamara
-DESCRIPCIÓN:
+Módulo: ingest.py
+Proyecto: Sistema de Predicción Meteorológica Híbrida (OpenMeteo-SQLite)
+Autor: Tamara
+Descripción:
     Script de alto nivel encargado de ejecutar la ingesta masiva de datos. 
     Implementa una estrategia de carga en dos fases para optimizar las llamadas
     a la API de Open-Meteo y garantizar que no existan lagunas temporales.
 
-ESTRATEGIA DE CARGA:
-    1. Fase Histórica (Bloque 1): Descarga masiva desde el año 2000 hasta ayer.
-       Utiliza 'modo_append=False' para limpiar la base de datos y evitar 
-       duplicados antiguos.
-    2. Fase de Actualización (Bloque 2): Descarga el día actual y el horizonte
-       de pronóstico. Utiliza 'modo_append=True' para añadir esta información
-       al bloque histórico sin borrarlo.
+Estrategia de carga:
+    1. Fase Histórica (Bloque 1):
+        Descarga masiva desde el año 2000 hasta ayer.
+        Utiliza 'modo_append=False' para limpiar la base de datos y evitar 
+        duplicados antiguos.
+    2. Fase de Actualización (Bloque 2): 
+        Descarga el día actual y el horizonte de pronóstico. 
+        Utiliza 'modo_append=True' para añadir esta información al bloque histórico 
+        sin borrarlo.
 
-SEGURIDAD:
+Seguridad:
     - Implementa pausas de cortesía (time.sleep) para cumplir con las políticas
-      de uso de la API gratuita y evitar bloqueos por IP.
-================================================================================
+      de uso de la API gratuita y evitar bloqueos por execso de peticiones (429).
+      
+Fujo general:
+    Para cada ciudad configurada:
+        -> bloque 1 (histórico)
+        -> Pausa
+        -> Bloque 2(forecast + datos recientes)
 """
 
 import time
@@ -29,8 +35,15 @@ from data.get_data import get_data
 
 def ingest():
     """
-    Ejecuta el ciclo completo de descarga y almacenamiento para todas las 
-    ciudades configuradas.
+    Ejecuta el ciclo completo de descarga , limpieza y almacenamiento para todas 
+    las ciudades configuradas en config.py
+    
+    Flujo:
+        1. Calcular la fecha de ayer para cerrar el bloque histórico.
+        2. Para cada ciudad:
+            - Ejecuta el bloque histórico (2000-> ayer).
+            - Espera 5 segundo para evitar saturación de la API.
+            - Ejecuta el bloque de forecast (hoy -> hoy).
     """
     print(f">>> 🔄 INICIANDO CARGA TOTAL (2000 - PRESENTE)")
     

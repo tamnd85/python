@@ -1,25 +1,26 @@
 """
-================================================================================
-MÓDULO: get_data.py
-PROYECTO: Sistema de Predicción Meteorológica Híbrida (OpenMeteo-SQLite)
-AUTOR: Tamara
-DESCRIPCIÓN:
+Módulo: get_data.py
+Proyecto: Sistema de Predicción Meteorológica Híbrida (OpenMeteo-SQLite)
+Autor: Tamara
+Descripción:
     Este módulo actúa como el director de orquesta del pipeline de datos. 
     Coordina secuencialmente la descarga (downloader), el saneamiento (cleaning) 
     y la persistencia en la base de datos (database).
 
-FUNCIONALIDADES CLAVE:
-    1. Orquestación Secuencial: Maneja el flujo de información entre la API y la DB.
-    2. Normalización ISO: Asegura que todas las fechas se manejen como strings 
-       estandarizados para evitar el error de época (1970) en SQLite.
-    3. Gestión de Persistencia: Permite elegir entre sobrescribir datos 
-       (histórico completo) o añadir nuevos (modo incremental/forecast).
-    4. Validación de Integridad: Verifica que el flujo no se rompa si la API 
-       falla o si la limpieza devuelve un set vacío.
+Funcionalidades:
+    1. Orquestación Secuencial:
+        Gestiona el flujo completo desde la API hasta SQLite.
+    2. Normalización ISO:
+        Convierte todas las fechas a formato YYYY-MM-DD para evitar problemas
+        con SQLite y garantizar consistencia.
+    3. Gestión de Persistencia: 
+        Permite elegir entre sobrescribir el histórico completo o añadir nuevos registros
+        en modo incremental/forecast.
+    4. Validación de Integridad: 
+        Detecta fallos en la API o en la limpieza y evita insertar datos corruptos
 
-FLUJO DE TRABAJO:
+Flujo de trabajoO:
     API -> Downloader -> Cleaning -> SQLite Persistence.
-================================================================================
 """
 
 from datetime import datetime, date
@@ -28,17 +29,32 @@ from data.downloader import descargar_datos_openmeteo
 from data.cleaning import clean_df
 from db.database import insertar_en_db, borrar_ciudad
 
+#----------------------------------------------------------------------------------------------
+# Función principal
+#----------------------------------------------------------------------------------------------
 def get_data(ciudad, lat, lon, fecha_ini=None, fecha_fin=None, modo_append=False):
     """
     Coordina la descarga, limpieza y persistencia de datos meteorológicos.
 
-    Args:
-        ciudad (str): Nombre de la estación.
-        lat (float): Latitud.
-        lon (float): Longitud.
-        fecha_ini (str): Fecha de inicio del bloque.
-        fecha_fin (str): Fecha de fin del bloque.
-        modo_append (bool): Si es True, no borra los datos previos de la ciudad.
+    Parámetros:
+        ciudad: str 
+            Nombre de la estación.
+        lat: float
+            Latitud de la ubicación.
+        lon: float
+            Longitud de la ubicación.
+        fecha_ini: str
+            Fecha de inicio del rango solicitado (YYYY-MM-DD).
+        fecha_fin: str
+            Fecha de fin del rango solicitado (YYYY-MM-DD).
+        modo_append: bool: 
+            Si es True, conserva datos previos y añade nuevos registros.
+            Si es false, borra el histórico de esa ciudad antes de insertar.
+    
+        Retorna:
+            pd.DataFrame or None
+                DataFrame final procedado e inserción en SQLite.
+                Retorna None si ocurre un fallo en cualquier fase.
     """
     # ---------------------------------------------------------------------------
     # 1. NORMALIZACIÓN DE PARÁMETROS TEMPORALES
@@ -73,7 +89,7 @@ def get_data(ciudad, lat, lon, fecha_ini=None, fecha_fin=None, modo_append=False
         return None
 
     # ---------------------------------------------------------------------------
-    # 4. PREPARACIÓN PARA SQLITE (FORMATO ISO ANTI-1970)
+    # 4. PREPARACIÓN PARA SQLITE 
     # ---------------------------------------------------------------------------
     # SQLite no tiene tipo 'Date'. Convertimos el objeto Timestamp a String ISO.
     df['time'] = pd.to_datetime(df['time']).dt.strftime('%Y-%m-%d')
@@ -82,7 +98,6 @@ def get_data(ciudad, lat, lon, fecha_ini=None, fecha_fin=None, modo_append=False
     # ---------------------------------------------------------------------------
     # 5. GESTIÓN DE PERSISTENCIA EN BASE DE DATOS
     # ---------------------------------------------------------------------------
-    # Lógica de 'Sobrescritura' vs 'Anexo':
     # Si modo_append=False (Carga Histórica), limpiamos el histórico de esa ciudad.
     if not modo_append:
         print(f"🧹 Limpiando registros antiguos de {ciudad}...")

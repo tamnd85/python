@@ -1,14 +1,28 @@
 """
 Módulo: email.py
+Proyecto: Sistema de Predicción Meteorológica Híbrida (OpeneMeteo_Sqlite)
 Autor: Tamara
 Descripción:
     Envío de mensajes de alerta a Telegram usando la API oficial.
     
-    Este módulo:
-        - Carga credenciales desde variables de entorno (.env)
-        - Construye la petición HTTP POST a la PI de Telegram
-        - Envía mensajes de texto a un chat concreto
-        - Interpreta códigos de error comunes
+    Este módulo prporciona una interfaz sencilla ara enviar notificaciones
+    meteorológicas a un chat de Telegram. El envío depende de credenciales
+    definidas en el archivo .env, lo que permite activar o desactivar el canal
+    sin modificar el código.
+    
+Funcionalidades:
+    - Carga de creadenciales desde variables de entorno.
+    - Construcciñon de peticiones HTTP POST a la API oficial de telegram.
+    - Envío de mensajes de texto a un chat concreto.
+    - Interpretación de códigos de errores comunes ( 400, 401, 403).
+    
+Requisitos en .env:
+    TELEGRAM_BOT_TOKEN=token_del_bot
+    TELEGRAM_CHAT_ID= id_del_chat
+    TELEGRAM_ENABLED=True/False (controlado por alert_sender.py)
+    
+Nota:
+    El usuario debe haber pulsado START en el bot para permitir el envío.
 """
 import os
 import requests
@@ -16,22 +30,28 @@ from dotenv import load_dotenv
 
 # Carga las variables de entorno desde el archivo .env
 load_dotenv()
+#----------------------------------------------------------------------------
+# Función principal: envío de mensajes a Telegram
+#----------------------------------------------------------------------------
 
 def enviar_telegram(mensaje: str) -> None:
     """
     Envía un mensaje de texto a un chat de Telegram usando la API oficial
 
-    Requisitos:
-        - TELEGRAM_BOT_TOKEN en el .env
-        - TELEGRAM_CHAT_ID en el .env
-        -El bot debe terner permiso para escribir al usuario (haber pulsado START)
-        
     Flujo:
         1. Cargar token y chat_id desde variables de entorno.
         2. Validar que existen.
         3. Construir la URL de la API y el payload.
         4. Enviar el mensaje mediante POST.
         5. Interpretar códigos de error comunes
+        
+    Parámetros:
+        mensaje: str
+            texto plano que se enviará al chat de Telegram.
+            
+    Retorna:
+        None
+            No retorna nada; solo ejecuta el envío si las credenciales son válidas.
     """
     
     #----------------------------------------------------------------------------

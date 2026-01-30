@@ -1,28 +1,34 @@
 """
-================================================================================
-MÓDULO: download.py
-PROYECTO: Sistema de Predicción Meteorológica Híbrida (OpenMeteo-SQLite)
-AUTOR: Tamara
-DESCRIPCIÓN:
+Módulo: download.py
+Proyecto: Sistema de Predicción Meteorológica Híbrida (OpenMeteo-SQLite)
+Autor: Tamara
+Descricpción:
     Este módulo gestiona la adquisición de datos desde la API de Open-Meteo.
     Implementa una lógica dual para alternar entre datos históricos (Archive)
     y datos de previsión (Forecast) según el rango de fechas solicitado.
 
-FUNCIONALIDADES CLAVE:
-    1. Lógica Híbrida de API: Selecciona automáticamente el endpoint correcto 
-       según si la fecha solicitada es pasada o futura.
-    2. Agregación Temporal: Transforma datos horarios (hourly) en promedios 
-       diarios para mantener la consistencia con la tabla de mediciones.
-    3. Resiliencia: Implementa un sistema de reintentos (hasta 5) con pausas 
-       estratégicas ante fallos de conexión o límites de tasa (Rate Limit).
-    4. Mezcla de Datos (Merge): Combina variables diarias (temperaturas mín/máx)
-       con variables horarias promediadas (humedad, presión).
+Funcionalidades:
+    1. Lógica Híbrida de API: 
+        Selecciona automáticamente el endpoint correcto según si la fecha solicitada 
+        es pasada o futura.
+    2. Agregación Temporal:
+        Convierte datos horarios en medias diaroas para mantener consistencia con la 
+        tabla de mediciones del sistema.
+    3. Resiliencia: 
+        Implementa un sistema de reintentos (hasta 5) con pausas estratégicas ante 
+        fallos de conexión o límites de tasa (Rate Limit).
+    4. Mezcla de Datos (Merge): 
+        Combina variables diarias (temperaturas mín/máx)con variables horarias 
+        promediadas (humedad, presión, viento, nubosidad).
 
 FLUJO DE DATOS:
-    Input:  Coordenadas (Lat/Lon) y Rango de Fechas.
-    Process: Request HTTP -> JSON Parsing -> Pandas Aggregation -> Data Join.
-    Output: DataFrame unificado y listo para el proceso de limpieza (cleaning.py).
-================================================================================
+    Input:
+        - Coordenadas (Lat/Lon) 
+        - Rango de Fechas.
+    Proceso:
+        Request HTTP -> JSON Parsing -> Pandas Aggregation -> Merge.
+    Output: 
+        DataFrame unificado y listo para el proceso de limpieza (cleaning.py).
 """
 
 import time
@@ -31,18 +37,28 @@ import requests
 from datetime import date
 from config.config import START_DATE, END_DATE
 
+#---------------------------------------------------------------------------------
+# Función principal: descarga y unificación de datos
+#---------------------------------------------------------------------------------
+
 def descargar_datos_openmeteo(lat, lon, fecha_ini=None, fecha_fin=None):
     """
     Descarga y unifica datos diarios y horarios de Open-Meteo.
     
-    Args:
-        lat (float): Latitud de la ubicación.
-        lon (float): Longitud de la ubicación.
-        fecha_ini (str, opcional): Fecha de inicio YYYY-MM-DD.
-        fecha_fin (str, opcional): Fecha de fin YYYY-MM-DD.
+    Parámetros:
+        lat: float
+            Latitud de la ubicación.
+        lon: float
+            Longitud de la ubicación.
+        fecha_ini: str, opcional 
+            Fecha de inicio YYYY-MM-DD.
+        fecha_fin: str, opcional
+            Fecha de fin YYYY-MM-DD.
         
-    Returns:
-        pd.DataFrame: Conjunto de datos combinado o DataFrame vacío si falla.
+    REtorna:
+        pd.DataFrame
+            DataFrame con datos cobinados (daily + hourly agregados)
+            Si la descarga falla tras 5 intentos, retorna un DataFrame vacío.
     """
     fecha_ini_str = str(fecha_ini or START_DATE)
     fecha_fin_str = str(fecha_fin or END_DATE)
@@ -83,6 +99,7 @@ def descargar_datos_openmeteo(lat, lon, fecha_ini=None, fecha_fin=None):
             r = requests.get(url, timeout=60) 
             data = r.json()
 
+            # Validación mínima: deben existir bloques daily y hourly
             if "daily" in data and "hourly" in data:
                 # Procesamiento de Datos Diarios
                 df_daily = pd.DataFrame(data["daily"])
@@ -123,6 +140,7 @@ def descargar_datos_openmeteo(lat, lon, fecha_ini=None, fecha_fin=None):
                 
                 return df_res.loc[mask].drop(columns=['time_only'])
 
+            # Si la API devuelve un error explícito
             if "error" in data:
                 print(f"❌ Error API: {data.get('reason', 'Desconocido')}")
                 break

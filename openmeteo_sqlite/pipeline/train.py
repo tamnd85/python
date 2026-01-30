@@ -1,25 +1,36 @@
 """
-================================================================================
-MÓDULO: train.py (Orquestador de Entrenamiento)
-PROYECTO: Sistema de Predicción Meteorológica Híbrida
-AUTOR: Tamara
-DESCRIPCIÓN:
+Módulo: train.py (Orquestador de Entrenamiento)
+Proyecto: Sistema de Predicción Meteorológica Híbrida
+Autor: Tamara
+Descripción:
     Pipeline centralizado que coordina el flujo de datos entre SARIMA y XGBoost.
     Implementa la arquitectura de "Modelado de Residuos" de forma automatizada.
 
-FLUJO DE TRABAJO:
-    1. EXTRACCIÓN: Carga datos desde SQLite (históricos completos).
-    2. SARIMA (Capa Local): Itera por cada ciudad entrenando modelos específicos
-       para capturar la inercia térmica de cada ubicación.
-    3. RESIDUOS: Calcula la "señal de error" (Real - SARIMA).
-    4. XGBOOST (Capa Global): Entrena un único modelo multiciudad que aprende
-       a corregir el error basándose en meteorología y lags.
+Flujo de trabajo:
+    1. Extracción: 
+        Carga datos desde SQLite (históricos completos).
+    2. SARIMA (Modelo Local por Ciudad): 
+        Entrena un modelo SARIMA independeiente para cada esatción, capturando
+        la inercia térmica y estacionalidad propia de cada ubicación.
+    3. Residuos:
+        Calcula la señal de error: residuo = real - sarima_pred.
+        Este residuo es el objetivo del modelo XGBoost.
+    4. XGBOOST (CModelo Global Multiciudad): 
+        Entrena un único modelo que aprende a corregir el residuo usando:
+                - Meteorología
+                - Tendencias
+                - Señales cíclicas
+                - Lags del residuo
+                - Transformaciones circulares del viento
 
-MODOS DE EJECUCIÓN:
+Modos de ejecución:
     - Normal: Entrenamiento exhaustivo con toda la serie.
     - Mensual: Entrenamiento optimizado mediante muestreo para evitar 
       estacionalidad sesgada y reducir carga computacional.
-================================================================================
+
+Nota
+    Este módulo es el núcleo del pipeline de entrenamiento híbrido. Su claridad
+    y robustez son esenciales para garantizar reproducibilidad y estabilidad.
 """
 
 import pandas as pd
@@ -39,7 +50,17 @@ from features.muestreo import muestreo_mensual
 
 def ejecutar_pipeline_entrenamiento(modo="normal", dias_por_mes=25):
     """
-    Ejecuta el pipeline híbrido secuencial.
+    Ejecuta el pipeline híbrido secuencial completo.
+
+    Parámetros:
+        modo : str
+            "normal"  → Entrenamiento completo.
+            "mensual" → Muestreo mensual para acelerar el entrenamiento.
+        dias_por_mes : int
+            Número de días consecutivos a extraer por mes en modo mensual.
+
+    Retorna:
+        None
     """
     print(f"\n>>> INICIANDO PIPELINE DE ENTRENAMIENTO: MODO {modo.upper()} <<<")
     
@@ -129,9 +150,11 @@ def ejecutar_pipeline_entrenamiento(modo="normal", dias_por_mes=25):
 # ------------------------------------------------------------------
 
 def entrenar_modelos():
+    """Entrena el pipeline completo en modo normal."""
     ejecutar_pipeline_entrenamiento(modo="normal")
 
 def entrenar_modelos_mensual(dias_por_mes=25):
+    """Entrena el pipeline completo usando muestreo mensual."""
     ejecutar_pipeline_entrenamiento(modo="mensual", dias_por_mes=dias_por_mes)
 
 if __name__ == "__main__":
