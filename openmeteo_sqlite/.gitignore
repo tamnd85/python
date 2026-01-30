@@ -21,8 +21,6 @@ venv/
 # === MODELOS ENTRENADOS ===
 models/
 *.pkl
-*.joblib
-
 # === LOGS ===
 logs/
 *.log
