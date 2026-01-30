@@ -12,11 +12,11 @@ El objetivo es disponer de un pipeline profesional, reproducible y mantenible, c
 
     El sistema OpenMeteo_SQLite combina técnicas de series temporales y machine learning para generar predicciones meteorológicas robustas:
 
-        SARIMA (modelado estacional anual)
+        SARIMA: MOdelado estacional que captura la tendencia anual y lo ciclos climáticos.
 
-        XGBoost (aprendizaje de residuos del modelo SARIMA)
+        XGBoost: "Corrector" inteligente que aprende los residuos (errores) del SARIMA basándose en variables exógenas como el viento, la presión y al humedad
 
-        Modelo híbrido estable: predicción = SARIMA + residuo_predicho
+        Modelo híbrido estable: Predicción Final = SARIMA + residuo_XGBoost
 
     El pipeline:
 
@@ -60,8 +60,19 @@ El módulo cleaning.py:
 
 ### Modelo predictivo
 
-El sistema entrena dos modelos híbridos independientes:
-#### Entrenamiento normal
+#### Tipos de entrenamiento
+
+        - Entrenamiento multiciudad:
+                El modelo XGBoost se entrena con datos combinados de todas las estaciones, permitiendo que la "física" aprendida en un lugar (ej. relación presión-temperatura) ayude a predecir otros.
+
+        - Validación a ciegas:
+                Estrategia estaciones_random donde el modelo se entrena con $N-1$ ciudades y se evalúa en una ciudad totalmente desconocida, garantizando la capacidad de generalización
+        -Optimización por Muestreo Aleatorio (Monthly Sampling): 
+                En el pipeline mensual, se extraen $X$ días al azar de cada mes (ej. 25 días). Esto actúa como una técnica de regularización, obligando al modelo a aprender la variabilidad térmica mensual sin depender de una secuencia lineal.
+        Validación Robusta
+                Split Temporal 80/20: 
+                        Respeta estrictamente el orden cronológico. El 80% inicial entrena y el 20% final valida, evitando el data leakage (uso de información del futuro para predecir el pasado).
+#### Modelos
         - SARIMA
                 - Captura estacionalidad anual
                 - Modela tendencia y ciclos
@@ -87,6 +98,13 @@ Modelo generado:
 models/xgboost/xgb_multiciudad_mensual.pkl
 
 Este modelo permite análisis de tendencia a largo plazo y predicciones más estables en horizontes amplios.
+
+Optimización por Muestreo Aleatorio (Monthly Sampling): 
+        Para evitar el sobreajuste y mejorar la eficiencia del entrenamiento, el pipeline mensual implementa un algoritmo de selección aleatoria de días.
+
+        De cada mes, se extraen X días al azar (por defecto 25).
+
+        Esto garantiza que el modelo aprenda la variabilidad térmica del mes sin depender de una secuencia lineal, actuando como una técnica de regularización que mejora la generalización en predicciones de largo plazo.
 
 #### Entrenamiento y validación (80/20)
 El sistema utiliza un split temporal 80/20, respetando el orden cronológico:
@@ -171,18 +189,26 @@ openmeteo_sqlite/
 
 ##  Ejecución
 
-### Ejecutar el pipeline completo:
+### Entrenamiento del Modelo
+        - Entrenamiento Multiciudad:
+                Entrena con todos los datos disponibles en la base de datos, usando un spilt temporal
 
-        python src/pipeline.py
+        python main.py train --modo normal --split temporal
 
+        - Validación Ciega:
+                Entrena con todas las ciudades excepto una aleatoria para evaluar la capacidad de generalización del modelo
 
-### Ejecutar módulos individuales:
+        python main.py train --modo normal --split estaciones_random
 
+### Generar Predicciones (Forecast)
+        Calcula la temperatura hibrida(SARIMA+XGBoost) integrando el pronostrico del viento y presión en tiempo real
 
-        python data/get_data.py
-        python pipeline/train.py
-        python pipeline/forecast.py
-        python check_alerts.py
+        python main.py forecast --ciudad "" --dias 7
+
+### Sistema de alertas
+        Evalúa las condiciones meteorológicas y envía notificaciones a Telegram y Email
+
+        python main.py alerts
 
 
 ##  Base de datos
