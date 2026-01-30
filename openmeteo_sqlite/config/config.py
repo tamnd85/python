@@ -41,7 +41,9 @@ END_DATE = str(date.today())
 # CIUDADES A DESCARGAR
 # ============================
 CIUDADES = [
-    {"nombre": "Santander", "lat": 43.4623, "lon": -3.8099},
+    #{"nombre": "Sevilla", "lat": 43.4623, "lon": -3.8099},
+    {"nombre": "santander", "lat": 37.38, "lon": -5.98},  
+
 ]
 
 # ============================

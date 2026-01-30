@@ -1,26 +1,6 @@
 """
 ================================================================================
-MÓDULO: database.py
-PROYECTO: Sistema de Predicción Meteorológica Híbrida (OpenMeteo-SQLite)
-AUTOR: Tamara
-DESCRIPCIÓN:
-    Gestión optimizada de la base de datos SQLite. Este módulo centraliza 
-    las operaciones CRUD (Crear, Leer, Borrar) y asegura que la persistencia
-    de datos mantenga la integridad de los tipos de datos físicos y temporales.
-
-FUNCIONALIDADES CLAVE:
-    1. Esquema Rígido: Define una estructura de tabla que coincide exactamente
-       con las variables de Open-Meteo, evitando errores de desajuste de columnas.
-    2. Manejo de Fechas ISO: Implementa la "Regla de Oro" para almacenar fechas
-       como TEXTO, garantizando la compatibilidad con el ecosistema de Pandas.
-    3. Idempotencia: Mediante la función 'borrar_ciudad', permite realizar
-       cargas limpias (full-load) sin duplicar registros históricos.
-    4. Flexibilidad de Carga: Soporta extracciones totales o filtradas por estación.
-
-AVISO TÉCNICO:
-    SQLite no dispone de un tipo 'DATE' nativo. El uso de 'TEXT' en formato 
-    ISO (YYYY-MM-DD) es obligatorio para que las comparaciones de rangos
-    y el ordenamiento cronológico funcionen correctamente.
+MÓDULO: database.py (CORREGIDO - Case Insensitive)
 ================================================================================
 """
 
@@ -29,14 +9,10 @@ import pandas as pd
 from config.config import DB_PATH, TABLA_DB
 
 # -----------------------------------------------------------------------------
-# 1. GESTIÓN DEL ESQUEMA (DÉFINICIÓN DE TABLA)
+# 1. GESTIÓN DEL ESQUEMA
 # -----------------------------------------------------------------------------
 
 def crear_tabla_si_no_existe():
-    """
-    Inicializa la base de datos y define el esquema de la tabla principal.
-    Utiliza tipos REAL para datos meteorológicos y TEXT para dimensiones.
-    """
     conn = sqlite3.connect(DB_PATH)
     conn.execute(f"""
         CREATE TABLE IF NOT EXISTS {TABLA_DB} (
@@ -61,72 +37,64 @@ def crear_tabla_si_no_existe():
     conn.close()
 
 # -----------------------------------------------------------------------------
-# 2. LIMPIEZA DE REGISTROS (MANTENIMIENTO)
+# 2. LIMPIEZA DE REGISTROS (Normalizado a minúsculas)
 # -----------------------------------------------------------------------------
 
 def borrar_ciudad(ciudad):
-    """
-    Elimina registros existentes de una estación para prevenir solapamientos.
-    Se ejecuta típicamente antes de una carga histórica masiva.
-    """
     crear_tabla_si_no_existe()
     conn = sqlite3.connect(DB_PATH)
+    # Forzamos minúsculas para asegurar el borrado
+    ciudad_clean = ciudad.lower() 
     try:
-        conn.execute(f"DELETE FROM {TABLA_DB} WHERE estacion = ?", (ciudad,))
+        conn.execute(f"DELETE FROM {TABLA_DB} WHERE LOWER(estacion) = ?", (ciudad_clean,))
         conn.commit()
-        print(f"🧹 Datos previos de {ciudad} eliminados de la DB.")
+        print(f"🧹 Datos previos de {ciudad_clean} eliminados de la DB.")
     except Exception as e:
         print(f"⚠ Error al limpiar datos de {ciudad}: {e}")
     finally:
         conn.close()
 
 # -----------------------------------------------------------------------------
-# 3. PERSISTENCIA DE DATOS (ESCRITURA)
+# 3. PERSISTENCIA DE DATOS (Normalizado a minúsculas)
 # -----------------------------------------------------------------------------
 
 def insertar_en_db(df, estacion):
-    """
-    Persiste un DataFrame en SQLite aplicando la regla de oro de fechas.
-    """
     crear_tabla_si_no_existe()
     df = df.copy()
 
-    # --- REGLA DE ORO ANTI-1970 ---
-    # Convertimos la columna a datetime y luego a STRING individualmente.
-    # Esto asegura que cada registro conserve su día en formato ISO legible.
+    # REGLA DE ORO: Fechas ISO y estación en minúsculas
     df['time'] = pd.to_datetime(df['time'], errors='coerce').dt.strftime('%Y-%m-%d')
-    df["estacion"] = estacion
+    df["estacion"] = estacion.lower() # <--- GUARDAMOS SIEMPRE EN MINÚSCULAS
     
-    # Limpieza de seguridad para evitar insertar nulos en la columna índice
     df = df.dropna(subset=['time'])
 
     conn = sqlite3.connect(DB_PATH)
     try:
-        # Obligamos explícitamente a SQLite a tratar 'time' como TEXTO
         df.to_sql(TABLA_DB, conn, if_exists="append", index=False, 
                 dtype={'time': 'TEXT'})
         conn.commit()
-        print(f"💾 Guardados {len(df)} registros reales para {estacion}.")
+        print(f"💾 Guardados {len(df)} registros reales para {df['estacion'].iloc[0]}.")
     except Exception as e:
         print(f"⚠ Error al insertar: {e}")
     finally:
         conn.close()
 
 # -----------------------------------------------------------------------------
-# 4. EXTRACCIÓN DE DATOS (LECTURA)
+# 4. EXTRACCIÓN DE DATOS (Búsqueda robusta)
 # -----------------------------------------------------------------------------
 
 def load_from_db(estacion=None):
     """
-    Recupera registros desde la DB y los devuelve como DataFrame.
-    Permite filtrado por estación para optimizar el uso de memoria.
+    Recupera registros usando LOWER para ignorar mayúsculas/minúsculas.
     """
     crear_tabla_si_no_existe()
     conn = sqlite3.connect(DB_PATH)
 
     if estacion:
-        query = f"SELECT * FROM {TABLA_DB} WHERE estacion = ?"
-        df = pd.read_sql(query, conn, params=(estacion,))
+        # Buscamos usando LOWER en SQL para que coincida siempre
+        estacion_clean = estacion.lower()
+        query = f"SELECT * FROM {TABLA_DB} WHERE LOWER(estacion) = ?"
+        df = pd.read_sql(query, conn, params=(estacion_clean,))
     else:
         query = f"SELECT * FROM {TABLA_DB}"
         df = pd.read_sql(query, conn)

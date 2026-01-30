@@ -21,7 +21,7 @@ DB_PATH = "datos/openmeteo.db"
 
 # Coordenadas de tus ciudades
 COORDS = {
-    #"Burgos": (42.3439, -3.6969),
+    #"Sevilla": (37.3828, -5.9731),
     "Santander": (43.4623, -3.8099),
 }
 

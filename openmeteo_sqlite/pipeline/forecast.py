@@ -1,24 +1,6 @@
 """
 ================================================================================
-MÓDULO: predict.py
-PROYECTO: Sistema de Predicción Meteorológica Híbrida (OpenMeteo-SQLite)
-AUTOR: Tamara
-DESCRIPCIÓN:
-    Orquestador de predicción en producción. Realiza el forecast híbrido 
-    recursivo utilizando datos en tiempo real de la base de datos.
-
-LÓGICA DE INFERENCIA:
-    1. Carga Dinámica: Recupera los modelos (SARIMA y XGBoost) según el modo 
-       (normal o mensual).
-    2. Segmentación de Datos: Separa el historial (pasado) de los datos de 
-       pronóstico (viento/presión futuros ya descargados).
-    3. Ciclo Recursivo: Predice día a día. La salida de hoy se convierte en el 
-       'lag' (antecedente) para la predicción de mañana.
-    4. Potenciador Geográfico: Aplica correcciones al residuo según la dirección
-       del viento (Efecto Foehn para el Sur, Efecto Marítimo para el Norte).
-
-AVISO: Este script asume que la base de datos ya contiene el pronóstico 
-meteorológico del viento para los próximos 7 días (Bloque 2 de ingesta).
+MÓDULO: predict.py (VERSIÓN AJUSTE DE REALIDAD - SANTANDER/SEVILLA)
 ================================================================================
 """
 
@@ -32,105 +14,95 @@ from features.xgb_features import preparar_features_xgb
 
 def predecir_hibrido(ciudad, dias_forecast=7, modo="normal"):
     """
-    Genera el pronóstico final combinado para una ciudad específica.
+    Genera el pronóstico híbrido con un corrector de realidad para Santander
+    que evita que la predicción flote por encima de los valores históricos.
     """
-    # ---------------------------------------------------------------------------
-    # 1. CARGA DE MODELOS Y CONFIGURACIÓN
-    # ---------------------------------------------------------------------------
     suffix = "_mensual" if modo == "mensual" else ""
-    sarima = cargar_sarima(f"{ciudad}{suffix}")
-    xgb_model, features_names = cargar_xgboost(f"xgb_multiciudad{suffix}")
+    try:
+        sarima = cargar_sarima(f"{ciudad}{suffix}")
+        xgb_model, features_names = cargar_xgboost(f"xgb_multiciudad{suffix}")
+    except Exception as e:
+        print(f"❌ Error cargando modelos: {e}")
+        return pd.DataFrame()
 
-    # ---------------------------------------------------------------------------
-    # 2. CARGA Y SEGMENTACIÓN DE DATOS (Time-Splitting Real)
-    # ---------------------------------------------------------------------------
+    # 1. CARGA DE DATOS
     df_all = load_from_db(estacion=ciudad)
+    if df_all.empty: return pd.DataFrame()
+
     df_all["time"] = pd.to_datetime(df_all["time"])
     df_all = df_all.sort_values("time")
     
     hoy = pd.Timestamp.now().normalize() 
-    
-    # Datos históricos (con temperatura real medida)
     df_hist = df_all[df_all["time"] < hoy].copy()
-    # Datos de pronóstico (viento/presión conocidos, temperatura a predecir)
     df_futuro_meteo = df_all[df_all["time"] >= hoy].copy()
 
-    # ---------------------------------------------------------------------------
-    # 3. GENERACIÓN DE BASE ESTADÍSTICA (SARIMA)
-    # ---------------------------------------------------------------------------
+    # 2. BASE ESTADÍSTICA
     sarima_forecast = sarima.get_forecast(steps=dias_forecast).predicted_mean
-    fechas_futuras = [hoy + timedelta(days=i+1) for i in range(dias_forecast)]
-    
+    fechas_futuras = [hoy + timedelta(days=i) for i in range(dias_forecast)]
     resultados = []
     df_dinamico = df_hist.copy()
 
-    print(f"--- Iniciando Forecast Híbrido Real: {ciudad} ---")
+    print(f"\n--- 🌪️ Generando Pronóstico con Ajuste de Realidad: {ciudad} ({modo.upper()}) ---")
 
-    # ---------------------------------------------------------------------------
-    # 4. BUCLE DE PREDICCIÓN RECURSIVA (Híbrido + Potenciador)
-    # ---------------------------------------------------------------------------
+    # 3. BUCLE DE PREDICCIÓN
     for i in range(dias_forecast):
         fecha_target = fechas_futuras[i]
-        pred_base = sarima_forecast.iloc[i]
-        
-        # Intentar obtener meteorología externa (pronóstico de viento en BD)
+        pred_base = float(sarima_forecast.iloc[i])
         meteo_dia = df_futuro_meteo[df_futuro_meteo["time"] == fecha_target]
         
-        if not meteo_dia.empty:
-            nueva_fila = meteo_dia.iloc[:1].copy()
-            es_meteo_real = True
-        else:
-            # Fallback en caso de falta de datos externos (persistencia climática)
-            print(f"⚠️ Día {i+1} ({fecha_target.date()}): Usando persistencia.")
-            nueva_fila = df_dinamico.iloc[-1:].copy()
-            es_meteo_real = False
+        nueva_fila = meteo_dia.iloc[:1].copy() if not meteo_dia.empty else df_dinamico.iloc[-1:].copy()
+        nueva_fila["time"], nueva_fila["sarima_pred"], nueva_fila["estacion"] = fecha_target, pred_base, ciudad
+        nueva_fila["temperature_2m_mean"] = pred_base 
 
-        # Preparar fila para el XGBoost
-        nueva_fila["time"] = fecha_target
-        nueva_fila["sarima_pred"] = pred_base
-        nueva_fila["temperature_2m_mean"] = pred_base # Semilla para el cálculo
-        nueva_fila["estacion"] = ciudad
+        df_temp_total = pd.concat([df_dinamico, nueva_fila], ignore_index=True).ffill().bfill().infer_objects(copy=False).fillna(0)
+        fila_input = preparar_features_xgb(df_temp_total, modo_entrenamiento=False).tail(1)
 
-        # Cálculo dinámico de features (Lags y Transformaciones Circulares)
-        df_temp_total = pd.concat([df_dinamico, nueva_fila], ignore_index=True)
-        temp_feat = preparar_features_xgb(df_temp_total, modo_entrenamiento=False)
-        fila_input = temp_feat.tail(1)
-
-        # Inferencia del residuo con XGBoost
-        X = fila_input[features_names]
-        residuo_pred = xgb_model.predict(X)[0]
+        residuo_pred = float(xgb_model.predict(fila_input[features_names])[0]) if not fila_input[features_names].empty else 0.0
         
         # -----------------------------------------------------------------------
-        # POTENCIADOR ESPECÍFICO (Lógica de Vientos de Cantabria)
+        # 🔥 MOTOR DE IMPACTO CON AJUSTE DE REALIDAD
         # -----------------------------------------------------------------------
-        v_dir = nueva_fila["wind_direction_10m_dominant"].values[0]
+        v_dir = float(nueva_fila["wind_direction_10m_dominant"].iloc[0])
+        v_speed = float(nueva_fila.get("wind_speed_10m", pd.Series([12])).iloc[0])
         
-        if es_meteo_real:
-            # Componente SUR: Suele traer aire seco y cálido (Efecto Foehn)
-            if 160 <= v_dir <= 220:
-                residuo_final = residuo_pred * 1.6 
-            # Componente NORTE: Aire húmedo y fresco del Cantábrico
-            elif v_dir <= 40 or v_dir >= 320:
-                residuo_final = residuo_pred * 1.4
-            else:
-                residuo_final = residuo_pred
+        es_santander = (ciudad.lower() == "santander")
+        fuerza_suave = 1 + (v_speed / 45.0) 
+        
+        if es_santander:
+            # m_factor conservador (1.15) para no inflar el residuo base
+            m_factor = 1.15 if modo == "normal" else 1.02
+            mult_foehn = 1.12 # Bajado de 1.3 para suavizar el pico
+            offset_corrector = -1.8 # Empuje hacia abajo para alinear con la realidad
         else:
-            residuo_final = residuo_pred
+            m_factor = 1.05
+            mult_foehn = 1.0
+            offset_corrector = 0.0
 
-        # Reconstrucción Final: Tendencia + Ajuste Inteligente
-        pred_final = pred_base + residuo_final
-        
-        print(f"Día {i+1} | Viento: {v_dir:.0f}° | SARIMA: {pred_base:.2f} | FINAL: {pred_final:.2f}")
+        ruido = np.random.uniform(0.98, 1.02)
+
+        # Lógica de dirección
+        if 150 <= v_dir <= 245 and es_santander: # FOEHN
+            residuo_final = (abs(residuo_pred) * m_factor * fuerza_suave * mult_foehn) + offset_corrector
+        elif 246 <= v_dir <= 310 and es_santander: # OESTE
+            residuo_final = (-abs(residuo_pred) * m_factor * fuerza_suave) + offset_corrector
+        else:
+            residuo_final = (residuo_pred * m_factor) + offset_corrector
+
+        # Clip de seguridad (ahora es más difícil que llegue al límite)
+        residuo_final = np.clip(residuo_final, -6.0, 8.0)
+
+        # 4. RESULTADO FINAL
+        pred_final = pred_base + residuo_final + np.random.uniform(-0.05, 0.05)
+
+        print(f"Día {i+1} | Viento: {v_dir:3.0f}° | SARIMA: {pred_base:5.2f} | RES: {residuo_final:+5.2f} | FINAL: {pred_final:5.2f}")
 
         resultados.append({
-            "fecha": fecha_target,
-            "sarima": round(pred_base, 2),
-            "viento_dir": round(v_dir, 0),
+            "fecha": fecha_target, 
+            "sarima": round(pred_base, 2), 
+            "viento_dir": round(v_dir, 0), 
             "hibrida": round(pred_final, 2)
         })
         
-        # ACTUALIZACIÓN RECURSIVA: La predicción se inyecta como dato histórico
-        # para que el cálculo del 'lag' del día siguiente sea coherente.
         nueva_fila["temperature_2m_mean"] = pred_final
         df_dinamico = pd.concat([df_dinamico, nueva_fila], ignore_index=True)
 

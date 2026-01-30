@@ -102,7 +102,8 @@ def preparar_features_xgb(df, modo_entrenamiento=True):
         df = df.dropna(subset=cols_con_lags)
     else:
         # En modo producción rellenamos para evitar que el XGBoost rechace la fila
-        df = df.ffill().bfill().fillna(0)
+        df = df.ffill().bfill()
+        df = df.infer_objects(copy=False).fillna(0)
 
     return df.reset_index(drop=True)
 
